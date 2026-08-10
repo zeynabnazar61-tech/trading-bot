@@ -2,6 +2,8 @@
 __pycache__/
 *.pyc
 logs/*.log
+logs/risk_state.json
+.claude/
 .venv/
 venv/
 *.csv
