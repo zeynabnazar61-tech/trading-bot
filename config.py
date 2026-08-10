@@ -31,6 +31,9 @@ LONG_WINDOW = 50             # langer gleitender Durchschnitt
 MAX_POSITION_SIZE_USD = 500.0     # max. Kapital pro Position
 STOP_LOSS_PCT = 0.02              # 2% Stop-Loss pro Trade
 TAKE_PROFIT_PCT = 0.04            # 4% Take-Profit pro Trade
+# Maximaler erlaubter Tagesverlust: Der Bot stoppt sich selbst, sobald der
+# kumulierte Verlust an einem Tag 100 USD erreicht. Ein konservativer Wert
+# begrenzt das Risiko einzelner schlechter Handelstage und schützt Kapital.
 MAX_DAILY_LOSS_USD = 100.0        # Bot stoppt sich selbst bei Erreichen
 MAX_TRADES_PER_DAY = 5            # Überhandeln verhindern
 
