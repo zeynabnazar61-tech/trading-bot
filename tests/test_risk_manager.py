@@ -2,10 +2,24 @@ import sys
 import os
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
+import json
+import pytest
 from datetime import date, datetime, timedelta
 
 from risk_manager import RiskManager
 import config
+
+
+@pytest.fixture(autouse=True)
+def isolated_risk_state_file(tmp_path, monkeypatch):
+    """Isoliert jeden Test von der echten/gemeinsamen Risk-State-Datei.
+
+    Ohne das wuerde RiskManager() den beim vorherigen Test gespeicherten
+    Zustand (gleicher Tag) wiederladen und Tests wuerden sich gegenseitig
+    beeinflussen.
+    """
+    monkeypatch.setattr(config, "RISK_STATE_FILE", str(tmp_path / "risk_state.json"))
+    yield
 
 
 def test_position_size_respects_max_usd():
@@ -166,3 +180,109 @@ def test_record_trade_accumulates_pnl_and_count():
     assert rm.trades_today == 2
     assert rm.daily_pnl == 7.0
     assert rm.last_trade_time is not None
+
+
+# --- Persistenz des Risk-State (logs/risk_state.json) ---
+
+def test_state_file_written_after_record_trade(tmp_path):
+    state_file = tmp_path / "risk_state.json"
+    rm = RiskManager(state_file=str(state_file))
+    rm.record_trade(pnl=-20.0)
+
+    assert state_file.exists()
+    data = json.loads(state_file.read_text())
+    assert data["daily_pnl"] == -20.0
+    assert data["trades_today"] == 1
+    assert data["trading_halted"] is False
+    assert data["current_day"] == date.today().isoformat()
+
+
+def test_state_loaded_on_init_when_same_day(tmp_path):
+    state_file = tmp_path / "risk_state.json"
+    rm1 = RiskManager(state_file=str(state_file))
+    rm1.record_trade(pnl=-50.0)
+
+    rm2 = RiskManager(state_file=str(state_file))
+    assert rm2.daily_pnl == -50.0
+    assert rm2.trades_today == 1
+
+
+def test_halted_state_survives_restart_same_day():
+    """Kernfall aus dem Ticket: trading_halted darf nach einem Neustart nicht verloren gehen."""
+    state_file_path = str(config.RISK_STATE_FILE)
+    rm1 = RiskManager(state_file=state_file_path)
+    rm1.daily_pnl = -abs(config.MAX_DAILY_LOSS_USD)
+    assert rm1.can_trade() is False  # setzt trading_halted=True und speichert
+
+    rm2 = RiskManager(state_file=state_file_path)
+    assert rm2.trading_halted is True
+    assert rm2.can_trade() is False
+
+
+def test_state_from_previous_day_is_ignored_and_resets(tmp_path):
+    state_file = tmp_path / "risk_state.json"
+    state_file.write_text(json.dumps({
+        "daily_pnl": -999.0,
+        "trades_today": 99,
+        "trading_halted": True,
+        "current_day": (date.today() - timedelta(days=1)).isoformat(),
+    }))
+
+    rm = RiskManager(state_file=str(state_file))
+    assert rm.daily_pnl == 0.0
+    assert rm.trades_today == 0
+    assert rm.trading_halted is False
+    assert rm.current_day == date.today()
+    assert rm.can_trade() is True
+
+
+def test_missing_state_file_uses_defaults(tmp_path):
+    state_file = tmp_path / "does_not_exist.json"
+    rm = RiskManager(state_file=str(state_file))
+    assert rm.daily_pnl == 0.0
+    assert rm.trades_today == 0
+    assert rm.trading_halted is False
+
+
+def test_corrupt_state_file_falls_back_to_defaults(tmp_path):
+    state_file = tmp_path / "risk_state.json"
+    state_file.write_text("{ this is not valid json")
+
+    rm = RiskManager(state_file=str(state_file))
+    assert rm.daily_pnl == 0.0
+    assert rm.trades_today == 0
+    assert rm.trading_halted is False
+    # Sollte trotzdem normal weiterarbeiten koennen
+    assert rm.can_trade() is True
+
+
+def test_state_file_missing_required_keys_falls_back_to_defaults(tmp_path):
+    state_file = tmp_path / "risk_state.json"
+    state_file.write_text(json.dumps({"daily_pnl": -10.0}))  # current_day fehlt
+
+    rm = RiskManager(state_file=str(state_file))
+    assert rm.daily_pnl == 0.0
+    assert rm.trades_today == 0
+    assert rm.trading_halted is False
+
+
+def test_new_day_reset_persists_cleared_state(tmp_path):
+    state_file = tmp_path / "risk_state.json"
+    rm = RiskManager(state_file=str(state_file))
+    rm.record_trade(pnl=-30.0)
+
+    # Simuliere Tageswechsel und pruefe, dass der Reset auch gespeichert wird
+    rm.current_day = date.today() - timedelta(days=1)
+    rm._reset_if_new_day()
+
+    data = json.loads(state_file.read_text())
+    assert data["daily_pnl"] == 0.0
+    assert data["trades_today"] == 0
+    assert data["trading_halted"] is False
+    assert data["current_day"] == date.today().isoformat()
+
+
+def test_no_state_file_created_when_state_file_disabled(tmp_path):
+    rm = RiskManager(state_file="")
+    rm.record_trade(pnl=-5.0)
+    assert list(tmp_path.iterdir()) == []

@@ -40,6 +40,7 @@ MAX_TRADES_PER_DAY = 5            # Überhandeln verhindern
 # --- Sonstiges ---
 LOOP_INTERVAL_SECONDS = 60        # wie oft der Bot den Markt prüft
 LOG_FILE = "logs/trading_bot.log"
+RISK_STATE_FILE = "logs/risk_state.json"  # Persistenz fuer RiskManager-Tageszaehler (ueberlebt Neustarts)
 
 # --- Telegram (optional) ---
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")

@@ -12,6 +12,8 @@ Regeln hier:
 - NEU: Positionsgroesse wird anhand des Stop-Loss-Risikos berechnet,
        nicht mehr anhand eines festen Betrags
 """
+import json
+import os
 from datetime import date, datetime, timedelta
 import config
 from logger_setup import get_logger
@@ -20,12 +22,60 @@ logger = get_logger("risk_manager")
 
 
 class RiskManager:
-    def __init__(self):
+    def __init__(self, state_file: str = None):
+        self.state_file = state_file if state_file is not None else config.RISK_STATE_FILE
         self.daily_pnl = 0.0
         self.trades_today = 0
         self.current_day = date.today()
         self.trading_halted = False
         self.last_trade_time = None
+        self._load_state()
+
+    def _load_state(self):
+        """Laedt den gespeicherten Zustand, falls die Datei existiert und vom heutigen Tag ist."""
+        if not self.state_file or not os.path.exists(self.state_file):
+            return
+
+        try:
+            with open(self.state_file, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            saved_day = date.fromisoformat(data["current_day"])
+        except (OSError, ValueError, KeyError, json.JSONDecodeError):
+            logger.warning(f"Risk-State-Datei '{self.state_file}' ist unlesbar/korrupt -> ignoriere sie.")
+            return
+
+        if saved_day != date.today():
+            logger.info("Gespeicherter Risk-State stammt von einem frueheren Tag -> starte neuen Tag.")
+            return
+
+        self.daily_pnl = data.get("daily_pnl", 0.0)
+        self.trades_today = data.get("trades_today", 0)
+        self.trading_halted = data.get("trading_halted", False)
+        self.current_day = saved_day
+        logger.info(
+            f"Risk-State geladen: daily_pnl={self.daily_pnl:.2f}, trades_today={self.trades_today}, "
+            f"trading_halted={self.trading_halted}"
+        )
+
+    def _save_state(self):
+        """Speichert den aktuellen Zustand, damit er einen Neustart am selben Tag uebersteht."""
+        if not self.state_file:
+            return
+
+        try:
+            directory = os.path.dirname(self.state_file)
+            if directory:
+                os.makedirs(directory, exist_ok=True)
+            data = {
+                "daily_pnl": self.daily_pnl,
+                "trades_today": self.trades_today,
+                "trading_halted": self.trading_halted,
+                "current_day": self.current_day.isoformat(),
+            }
+            with open(self.state_file, "w", encoding="utf-8") as f:
+                json.dump(data, f)
+        except OSError:
+            logger.warning(f"Risk-State konnte nicht in '{self.state_file}' gespeichert werden.")
 
     def _reset_if_new_day(self):
         if date.today() != self.current_day:
@@ -34,6 +84,7 @@ class RiskManager:
             self.trades_today = 0
             self.current_day = date.today()
             self.trading_halted = False
+            self._save_state()
 
     def can_trade(self) -> bool:
         """Prueft, ob der Bot aktuell ueberhaupt handeln darf."""
@@ -47,6 +98,7 @@ class RiskManager:
                 f"Tagesverlust-Limit erreicht ({self.daily_pnl:.2f} USD) -> Handel gestoppt fuer heute."
             )
             self.trading_halted = True
+            self._save_state()
             return False
 
         if self.trades_today >= config.MAX_TRADES_PER_DAY:
@@ -93,6 +145,7 @@ class RiskManager:
         self.trades_today += 1
         self.daily_pnl += pnl
         self.last_trade_time = datetime.now()
+        self._save_state()
         logger.info(
             f"Trade #{self.trades_today} heute erfasst. Tages-PnL: {self.daily_pnl:.2f} USD"
         )
