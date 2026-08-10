@@ -58,6 +58,8 @@ def trading_cycle():
     current_price = float(df["close"].iloc[-1])
     position = executor.get_open_position(config.SYMBOL)
 
+    position_closed_this_cycle = False
+
     if signal_type == "BUY" and position is None:
         qty = risk_manager.calculate_position_size(current_price)
         if qty > 0:
@@ -70,27 +72,31 @@ def trading_cycle():
 
     elif signal_type == "SELL" and position is not None:
         qty = int(float(position.qty))
+        entry_price = float(position.avg_entry_price)
         order = executor.sell(config.SYMBOL, qty)
         if order:
-            risk_manager.record_trade()
+            risk_manager.record_trade(pnl=(current_price - entry_price) * qty)
+            position_closed_this_cycle = True
 
     else:
         logger.info(f"Kein Handlungsbedarf (Signal: {signal_type}, Position vorhanden: {position is not None})")
 
-    # Stop-Loss / Take-Profit prüfen, falls Position offen ist
-    if position is not None:
+    # Stop-Loss / Take-Profit prüfen, falls Position offen ist (und nicht bereits
+    # in diesem Zyklus per SELL-Signal geschlossen wurde, sonst doppelte PnL-Erfassung)
+    if position is not None and not position_closed_this_cycle:
         entry_price = float(position.avg_entry_price)
+        position_qty = int(float(position.qty))
         stop_loss = risk_manager.get_stop_loss_price(entry_price)
         take_profit = risk_manager.get_take_profit_price(entry_price)
 
         if current_price <= stop_loss:
             logger.warning(f"Stop-Loss ausgelöst bei {current_price:.2f} (Einstieg war {entry_price:.2f})")
             executor.close_position(config.SYMBOL)
-            risk_manager.record_trade(pnl=current_price - entry_price)
+            risk_manager.record_trade(pnl=(current_price - entry_price) * position_qty)
         elif current_price >= take_profit:
             logger.info(f"Take-Profit ausgelöst bei {current_price:.2f} (Einstieg war {entry_price:.2f})")
             executor.close_position(config.SYMBOL)
-            risk_manager.record_trade(pnl=current_price - entry_price)
+            risk_manager.record_trade(pnl=(current_price - entry_price) * position_qty)
 
 
 def main():
