@@ -1,0 +1,7 @@
+alpaca-py==0.33.1
+python-dotenv==1.0.1
+pandas==2.2.2
+numpy==1.26.4
+backtrader==1.9.78.123
+matplotlib==3.9.0
+requests==2.32.3
