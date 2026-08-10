@@ -317,3 +317,31 @@ def test_no_state_file_created_when_state_file_disabled(tmp_path):
     rm = RiskManager(state_file="")
     rm.record_trade(pnl=-5.0)
     assert list(tmp_path.iterdir()) == []
+
+
+# --- Kaufkraft-Deckelung (buying_power) ---
+
+def test_position_size_normal_buying_power_sufficient():
+    """Kaufkraft ist hoch genug -> andere Caps greifen, buying_power aendert nichts."""
+    rm = RiskManager()
+    qty_without = rm.calculate_position_size(current_price=100.0)
+    qty_with = rm.calculate_position_size(current_price=100.0, buying_power=100_000.0)
+    assert qty_with == qty_without
+    assert qty_with > 0
+
+
+def test_position_size_buying_power_is_binding_cap(monkeypatch):
+    """Kaufkraft ist der engste Deckel -> muss greifen, nicht MAX_RISK_PER_TRADE_USD oder MAX_POSITION_SIZE_USD."""
+    monkeypatch.setattr(config, "MAX_RISK_PER_TRADE_USD", 1000.0)
+    monkeypatch.setattr(config, "MAX_POSITION_SIZE_USD", 5000.0)
+    rm = RiskManager()
+    # price=100, buying_power=150 -> max 1 Aktie; ohne buying_power waere qty viel hoeher
+    qty = rm.calculate_position_size(current_price=100.0, buying_power=150.0)
+    assert qty == 1
+
+
+def test_position_size_zero_when_buying_power_zero():
+    """buying_power=0 -> keine Aktie kaufbar -> qty=0."""
+    rm = RiskManager()
+    qty = rm.calculate_position_size(current_price=100.0, buying_power=0.0)
+    assert qty == 0

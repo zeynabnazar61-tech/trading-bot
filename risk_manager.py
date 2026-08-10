@@ -131,11 +131,17 @@ class RiskManager:
 
         return True
 
-    def calculate_position_size(self, current_price: float) -> int:
+    def calculate_position_size(self, current_price: float, buying_power: float = None) -> int:
         """
         Berechnet die Positionsgroesse anhand des Stop-Loss-Risikos:
         Verlust pro Aktie (bei Stop-Loss-Treffer) * Anzahl <= MAX_RISK_PER_TRADE_USD.
         Zusaetzlich wird die Positionsgroesse durch MAX_POSITION_SIZE_USD gedeckelt.
+
+        buying_power: optionale, tatsaechlich verfuegbare Kaufkraft (z.B. aus
+        executor.get_account_info()["buying_power"]). Falls angegeben, wird die
+        Positionsgroesse zusaetzlich darauf gedeckelt, damit nie mehr gekauft wird,
+        als das Konto hergibt. Absichtlich als Parameter statt eines direkten
+        API-Calls hier drin, damit die Methode ohne Mocking der Alpaca-API testbar bleibt.
         """
         if current_price <= 0:
             return 0
@@ -148,6 +154,11 @@ class RiskManager:
         qty_by_cap = int(config.MAX_POSITION_SIZE_USD // current_price)
 
         qty = min(qty_by_risk, qty_by_cap)
+
+        if buying_power is not None:
+            qty_by_buying_power = int(buying_power // current_price) if buying_power > 0 else 0
+            qty = min(qty, qty_by_buying_power)
+
         return max(qty, 0)
 
     def get_stop_loss_price(self, entry_price: float) -> float:

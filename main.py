@@ -61,7 +61,12 @@ def trading_cycle():
     position_closed_this_cycle = False
 
     if signal_type == "BUY" and position is None:
-        qty = risk_manager.calculate_position_size(current_price)
+        account = executor.get_account_info()
+        if account is None:
+            logger.error("Konnte Kontodaten nicht abrufen -> Kauf sicherheitshalber uebersprungen (fail-safe).")
+            qty = 0
+        else:
+            qty = risk_manager.calculate_position_size(current_price, buying_power=account["buying_power"])
         if qty > 0:
             order = executor.buy(config.SYMBOL, qty)
             if order:
