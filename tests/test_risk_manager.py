@@ -244,26 +244,57 @@ def test_missing_state_file_uses_defaults(tmp_path):
     assert rm.trading_halted is False
 
 
-def test_corrupt_state_file_falls_back_to_defaults(tmp_path):
+def test_corrupt_state_file_fails_closed(tmp_path):
+    """Korrupte State-Datei muss fail-closed behandelt werden: trading_halted=True."""
     state_file = tmp_path / "risk_state.json"
     state_file.write_text("{ this is not valid json")
 
     rm = RiskManager(state_file=str(state_file))
-    assert rm.daily_pnl == 0.0
-    assert rm.trades_today == 0
-    assert rm.trading_halted is False
-    # Sollte trotzdem normal weiterarbeiten koennen
-    assert rm.can_trade() is True
+    assert rm.trading_halted is True
+    # Handel bleibt gesperrt, bis manuell eingegriffen wird
+    assert rm.can_trade() is False
 
 
-def test_state_file_missing_required_keys_falls_back_to_defaults(tmp_path):
+def test_state_file_missing_required_keys_fails_closed(tmp_path):
+    """Unvollstaendige State-Datei (fehlende Pflichtfelder) muss fail-closed behandelt werden."""
     state_file = tmp_path / "risk_state.json"
     state_file.write_text(json.dumps({"daily_pnl": -10.0}))  # current_day fehlt
 
     rm = RiskManager(state_file=str(state_file))
-    assert rm.daily_pnl == 0.0
-    assert rm.trades_today == 0
-    assert rm.trading_halted is False
+    assert rm.trading_halted is True
+    assert rm.can_trade() is False
+
+
+def test_truncated_torn_state_file_fails_closed(tmp_path):
+    """Abgeschnittene/torn JSON-Datei (z.B. Absturz waehrend nicht-atomaren Schreibens)
+    muss ebenfalls fail-closed behandelt werden."""
+    state_file = tmp_path / "risk_state.json"
+    full_data = json.dumps({
+        "daily_pnl": -10.0,
+        "trades_today": 2,
+        "trading_halted": False,
+        "current_day": date.today().isoformat(),
+    })
+    # Datei mittendrin abschneiden, um ein unvollstaendiges Schreiben zu simulieren
+    state_file.write_text(full_data[: len(full_data) // 2])
+
+    rm = RiskManager(state_file=str(state_file))
+    assert rm.trading_halted is True
+    assert rm.can_trade() is False
+
+
+def test_save_state_is_atomic_no_leftover_tmp_file(tmp_path):
+    """Nach erfolgreichem _save_state() darf keine temporaere Datei mehr uebrig sein,
+    und die Zieldatei muss vollstaendig lesbares JSON enthalten."""
+    state_file = tmp_path / "risk_state.json"
+    rm = RiskManager(state_file=str(state_file))
+    rm.record_trade(pnl=-5.0)
+
+    files_in_dir = list(tmp_path.iterdir())
+    assert files_in_dir == [state_file]
+
+    data = json.loads(state_file.read_text())
+    assert data["trades_today"] == 1
 
 
 def test_new_day_reset_persists_cleared_state(tmp_path):

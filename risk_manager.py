@@ -41,7 +41,12 @@ class RiskManager:
                 data = json.load(f)
             saved_day = date.fromisoformat(data["current_day"])
         except (OSError, ValueError, KeyError, json.JSONDecodeError):
-            logger.warning(f"Risk-State-Datei '{self.state_file}' ist unlesbar/korrupt -> ignoriere sie.")
+            logger.error(
+                f"Risk-State-Datei '{self.state_file}' ist unlesbar/korrupt/unvollstaendig -> "
+                "FAIL-CLOSED: Handel wird angehalten (trading_halted=True). "
+                "Manuelles Eingreifen erforderlich, bevor der Bot weiterhandeln darf."
+            )
+            self.trading_halted = True
             return
 
         if saved_day != date.today():
@@ -58,12 +63,14 @@ class RiskManager:
         )
 
     def _save_state(self):
-        """Speichert den aktuellen Zustand, damit er einen Neustart am selben Tag uebersteht."""
+        """Speichert den aktuellen Zustand atomar (temp-Datei + os.replace), damit ein Absturz
+        waehrend des Schreibens nie eine abgeschnittene/korrupte State-Datei hinterlaesst."""
         if not self.state_file:
             return
 
+        directory = os.path.dirname(self.state_file)
+        tmp_path = None
         try:
-            directory = os.path.dirname(self.state_file)
             if directory:
                 os.makedirs(directory, exist_ok=True)
             data = {
@@ -72,10 +79,19 @@ class RiskManager:
                 "trading_halted": self.trading_halted,
                 "current_day": self.current_day.isoformat(),
             }
-            with open(self.state_file, "w", encoding="utf-8") as f:
+            tmp_path = f"{self.state_file}.tmp{os.getpid()}"
+            with open(tmp_path, "w", encoding="utf-8") as f:
                 json.dump(data, f)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(tmp_path, self.state_file)
         except OSError:
             logger.warning(f"Risk-State konnte nicht in '{self.state_file}' gespeichert werden.")
+            if tmp_path and os.path.exists(tmp_path):
+                try:
+                    os.remove(tmp_path)
+                except OSError:
+                    pass
 
     def _reset_if_new_day(self):
         if date.today() != self.current_day:
