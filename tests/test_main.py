@@ -67,6 +67,7 @@ def test_buy_signal_without_open_position_places_buy_order():
     with patch.object(main.data, "get_recent_bars", return_value=_fake_df(current_price)), \
          patch.object(main.strategy, "generate_signal", return_value="BUY"), \
          patch.object(main.executor, "get_open_position", return_value=None), \
+         patch.object(main.executor, "get_account_info", return_value={"cash": 100000.0, "portfolio_value": 100000.0, "buying_power": 100000.0}), \
          patch.object(main.executor, "buy", return_value=MagicMock()) as mock_buy, \
          patch.object(main.risk_manager, "can_trade", return_value=True), \
          patch.object(main.risk_manager, "calculate_position_size", return_value=3), \
@@ -84,6 +85,7 @@ def test_buy_signal_with_zero_qty_skips_order():
     with patch.object(main.data, "get_recent_bars", return_value=_fake_df(current_price)), \
          patch.object(main.strategy, "generate_signal", return_value="BUY"), \
          patch.object(main.executor, "get_open_position", return_value=None), \
+         patch.object(main.executor, "get_account_info", return_value={"cash": 100000.0, "portfolio_value": 100000.0, "buying_power": 100000.0}), \
          patch.object(main.executor, "buy") as mock_buy, \
          patch.object(main.risk_manager, "can_trade", return_value=True), \
          patch.object(main.risk_manager, "calculate_position_size", return_value=0), \
@@ -100,12 +102,32 @@ def test_buy_signal_when_order_fails_does_not_record_trade():
     with patch.object(main.data, "get_recent_bars", return_value=_fake_df(current_price)), \
          patch.object(main.strategy, "generate_signal", return_value="BUY"), \
          patch.object(main.executor, "get_open_position", return_value=None), \
+         patch.object(main.executor, "get_account_info", return_value={"cash": 100000.0, "portfolio_value": 100000.0, "buying_power": 100000.0}), \
          patch.object(main.executor, "buy", return_value=None), \
          patch.object(main.risk_manager, "can_trade", return_value=True), \
          patch.object(main.risk_manager, "calculate_position_size", return_value=3), \
          patch.object(main.risk_manager, "record_trade") as mock_record_trade:
         main.trading_cycle()
 
+    mock_record_trade.assert_not_called()
+
+
+def test_buy_signal_when_account_info_unavailable_skips_buy_fail_safe():
+    """Fail-Safe: get_account_info() liefert None (z.B. API-Fehler) -> Kauf wird sicherheitshalber uebersprungen."""
+    current_price = 100.0
+
+    with patch.object(main.data, "get_recent_bars", return_value=_fake_df(current_price)), \
+         patch.object(main.strategy, "generate_signal", return_value="BUY"), \
+         patch.object(main.executor, "get_open_position", return_value=None), \
+         patch.object(main.executor, "get_account_info", return_value=None), \
+         patch.object(main.executor, "buy") as mock_buy, \
+         patch.object(main.risk_manager, "can_trade", return_value=True), \
+         patch.object(main.risk_manager, "calculate_position_size") as mock_calculate_position_size, \
+         patch.object(main.risk_manager, "record_trade") as mock_record_trade:
+        main.trading_cycle()
+
+    mock_buy.assert_not_called()
+    mock_calculate_position_size.assert_not_called()
     mock_record_trade.assert_not_called()
 
 
