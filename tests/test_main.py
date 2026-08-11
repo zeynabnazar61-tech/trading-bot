@@ -95,6 +95,28 @@ def test_stop_loss_exit_unfilled_order_does_not_record_trade():
     mock_record_trade.assert_not_called()
 
 
+def test_take_profit_exit_unfilled_order_does_not_record_trade():
+    """ZOZ-35: Analog zu test_stop_loss_exit_unfilled_order_does_not_record_trade fuer den
+    Take-Profit-Pfad. Wenn die Take-Profit-Close-Order nicht bestaetigt wird (Timeout/Ablehnung),
+    darf KEIN record_trade erfolgen - der interne Zustand darf nicht vom Konto abweichen."""
+    entry_price = 100.0
+    qty = 4
+    current_price = 105.0  # ueber Take-Profit (4%) -> loest Exit aus
+
+    position = _fake_position(qty=qty, avg_entry_price=entry_price)
+
+    with patch.object(main.data, "get_recent_bars", return_value=_fake_df(current_price)), \
+         patch.object(main.strategy, "generate_signal", return_value="HOLD"), \
+         patch.object(main.executor, "get_open_position", return_value=position), \
+         patch.object(main.executor, "close_position", return_value=MagicMock()), \
+         patch.object(main.executor, "wait_for_order_fill", return_value=None), \
+         patch.object(main.risk_manager, "can_trade", return_value=True), \
+         patch.object(main.risk_manager, "record_trade") as mock_record_trade:
+        main.trading_cycle()
+
+    mock_record_trade.assert_not_called()
+
+
 def test_buy_signal_without_open_position_places_buy_order():
     current_price = 100.0
     filled_order = _fake_filled_order(filled_qty=3, filled_avg_price=current_price)

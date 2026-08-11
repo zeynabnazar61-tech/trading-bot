@@ -20,12 +20,16 @@ _client = TradingClient(config.ALPACA_API_KEY, config.ALPACA_SECRET_KEY, paper=c
 # Endzustaende, in denen eine Order NICHT (mehr) gefuellt werden kann/wird.
 # Konservativ weit gefasst, damit der Bot in keinem dieser Faelle faelschlich
 # auf "irgendwann noch gefuellt" wartet oder gar record_trade() aufruft.
+#
+# STOPPED ist laut Alpaca-Doku KEIN "terminal unfilled"-Status: Ein Fill ist
+# garantiert, hat aber noch nicht stattgefunden -> wird bewusst NICHT hier
+# aufgenommen, damit der Bot weiter auf den tatsaechlichen Fill pollt statt
+# faelschlich abzubrechen.
 _TERMINAL_UNFILLED_STATUSES = {
     OrderStatus.REJECTED,
     OrderStatus.CANCELED,
     OrderStatus.EXPIRED,
     OrderStatus.DONE_FOR_DAY,
-    OrderStatus.STOPPED,
     OrderStatus.SUSPENDED,
     OrderStatus.REPLACED,
 }
@@ -72,9 +76,19 @@ def wait_for_order_fill(order, timeout_seconds: float = None, poll_interval_seco
     Timeout erreicht ist.
 
     Gibt bei erfolgreichem Fill die aktualisierte Order (mit filled_qty/
-    filled_avg_price) zurueck. Gibt None zurueck bei Timeout, Ablehnung oder
-    Stornierung - der Aufrufer darf in diesem Fall KEIN record_trade() aufrufen,
-    da der tatsaechliche Kontostand dann nicht sicher bekannt ist.
+    filled_avg_price) zurueck. Gibt None zurueck bei Timeout ohne jeglichen
+    Fill, Ablehnung oder Stornierung - der Aufrufer darf in diesem Fall KEIN
+    record_trade() aufrufen, da der tatsaechliche Kontostand dann nicht sicher
+    bekannt ist.
+
+    Sonderfall Timeout bei PARTIALLY_FILLED: Ist die Order beim Erreichen des
+    Timeouts bereits teilweise gefuellt, wurde am Broker real Kapital bewegt.
+    In diesem Fall wird die letzte bekannte Order (mit ihrer tatsaechlichen
+    filled_qty/filled_avg_price) zurueckgegeben, statt sie zu verwerfen -
+    sonst weichen trades_today/daily_pnl im RiskManager vom echten
+    Broker-Kontostand ab. Der Aufrufer erfasst dann einen Trade mit der
+    (Teil-)Fuellmenge; die Restmenge bleibt als offene Order am Broker
+    bestehen und muss ggf. separat beobachtet werden.
     """
     if order is None or getattr(order, "id", None) is None:
         return None
@@ -86,7 +100,7 @@ def wait_for_order_fill(order, timeout_seconds: float = None, poll_interval_seco
 
     order_id = order.id
     max_attempts = max(1, int(timeout_seconds // poll_interval_seconds))
-    last_status = getattr(order, "status", None)
+    last_known_order = order
 
     for attempt in range(1, max_attempts + 1):
         try:
@@ -99,7 +113,7 @@ def wait_for_order_fill(order, timeout_seconds: float = None, poll_interval_seco
             current = None
 
         if current is not None:
-            last_status = current.status
+            last_known_order = current
             if current.status == OrderStatus.FILLED:
                 logger.info(
                     f"Order {order_id} gefuellt (Versuch {attempt}/{max_attempts}): "
@@ -117,6 +131,18 @@ def wait_for_order_fill(order, timeout_seconds: float = None, poll_interval_seco
 
         if attempt < max_attempts:
             time.sleep(poll_interval_seconds)
+
+    last_status = getattr(last_known_order, "status", None)
+    if last_status == OrderStatus.PARTIALLY_FILLED and float(getattr(last_known_order, "filled_qty", 0) or 0) > 0:
+        msg = (
+            f"Timeout beim Warten auf vollstaendige Fill-Bestaetigung fuer Order {order_id} "
+            f"nach {max_attempts} Versuchen, aber Order ist PARTIALLY_FILLED "
+            f"(filled_qty={last_known_order.filled_qty}, filled_avg_price={last_known_order.filled_avg_price}) "
+            "-> Teil-Fill wird als Trade erfasst. Rest-Order-Status manuell pruefen!"
+        )
+        logger.warning(msg)
+        send_telegram(msg)
+        return last_known_order
 
     msg = (
         f"Timeout beim Warten auf Fill-Bestaetigung fuer Order {order_id} "

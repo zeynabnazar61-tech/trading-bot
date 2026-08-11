@@ -218,6 +218,44 @@ def test_wait_for_order_fill_returns_none_when_order_canceled():
     mock_notify.assert_called_once()
 
 
+def test_wait_for_order_fill_times_out_but_returns_partial_fill_when_partially_filled():
+    """ZOZ-35: Erreicht das Timeout, waehrend die Order PARTIALLY_FILLED ist, wurde am Broker
+    bereits real Kapital bewegt. In diesem Fall muss die letzte bekannte Order (mit ihrer
+    tatsaechlichen filled_qty/filled_avg_price) zurueckgegeben werden, statt sie zu verwerfen -
+    sonst weichen trades_today/daily_pnl im RiskManager vom echten Broker-Kontostand ab."""
+    submitted_order = _fake_order()
+    partially_filled_order = _fake_order(status=OrderStatus.PARTIALLY_FILLED)
+    partially_filled_order.filled_qty = "3"
+    partially_filled_order.filled_avg_price = "123.45"
+
+    with patch.object(executor, "_client") as mock_client:
+        mock_client.get_order_by_id.return_value = partially_filled_order
+        with patch.object(executor, "time") as mock_time, patch.object(executor, "send_telegram") as mock_notify:
+            result = executor.wait_for_order_fill(submitted_order, timeout_seconds=0.05, poll_interval_seconds=0.02)
+
+    assert result is partially_filled_order
+    assert result.filled_qty == "3"
+    assert result.filled_avg_price == "123.45"
+    mock_notify.assert_called_once()
+
+
+def test_wait_for_order_fill_times_out_without_any_fill_returns_none():
+    """Timeout mit PARTIALLY_FILLED aber filled_qty=0 (z.B. Order gerade erst akzeptiert,
+    Feld noch nicht gesetzt) darf keinen Trade vortaeuschen -> weiterhin None."""
+    submitted_order = _fake_order()
+    partially_filled_order = _fake_order(status=OrderStatus.PARTIALLY_FILLED)
+    partially_filled_order.filled_qty = "0"
+    partially_filled_order.filled_avg_price = "0"
+
+    with patch.object(executor, "_client") as mock_client:
+        mock_client.get_order_by_id.return_value = partially_filled_order
+        with patch.object(executor, "time") as mock_time, patch.object(executor, "send_telegram") as mock_notify:
+            result = executor.wait_for_order_fill(submitted_order, timeout_seconds=0.05, poll_interval_seconds=0.02)
+
+    assert result is None
+    mock_notify.assert_called_once()
+
+
 def test_wait_for_order_fill_returns_none_when_order_is_none():
     with patch.object(executor, "_client") as mock_client:
         result = executor.wait_for_order_fill(None)
