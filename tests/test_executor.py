@@ -4,7 +4,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 
 from unittest.mock import MagicMock, patch
 
-from alpaca.trading.enums import OrderSide
+from alpaca.trading.enums import OrderSide, OrderStatus
 
 import executor
 
@@ -129,3 +129,123 @@ def test_get_account_info_returns_none_on_api_exception():
         result = executor.get_account_info()
 
     assert result is None
+
+
+def _fake_order(order_id="order-1", status=OrderStatus.NEW):
+    order = MagicMock()
+    order.id = order_id
+    order.status = status
+    return order
+
+
+def _fake_filled_order(order_id="order-1", filled_qty="5", filled_avg_price="123.45"):
+    order = _fake_order(order_id=order_id, status=OrderStatus.FILLED)
+    order.filled_qty = filled_qty
+    order.filled_avg_price = filled_avg_price
+    return order
+
+
+# --- wait_for_order_fill ---
+
+
+def test_wait_for_order_fill_returns_immediately_when_already_filled():
+    submitted_order = _fake_order()
+    filled_order = _fake_filled_order()
+
+    with patch.object(executor, "_client") as mock_client:
+        mock_client.get_order_by_id.return_value = filled_order
+        with patch.object(executor, "send_telegram"):
+            result = executor.wait_for_order_fill(submitted_order, timeout_seconds=30, poll_interval_seconds=2)
+
+    assert result is filled_order
+    mock_client.get_order_by_id.assert_called_once_with(submitted_order.id)
+
+
+def test_wait_for_order_fill_polls_multiple_times_until_filled():
+    submitted_order = _fake_order()
+    filled_order = _fake_filled_order()
+    pending_order = _fake_order(status=OrderStatus.NEW)
+    partially_filled_order = _fake_order(status=OrderStatus.PARTIALLY_FILLED)
+
+    with patch.object(executor, "_client") as mock_client:
+        mock_client.get_order_by_id.side_effect = [pending_order, partially_filled_order, filled_order]
+        with patch.object(executor, "time") as mock_time, patch.object(executor, "send_telegram"):
+            result = executor.wait_for_order_fill(submitted_order, timeout_seconds=30, poll_interval_seconds=2)
+
+    assert result is filled_order
+    assert mock_client.get_order_by_id.call_count == 3
+    assert mock_time.sleep.call_count == 2  # nur zwischen den Versuchen, nicht danach
+
+
+def test_wait_for_order_fill_times_out_and_does_not_return_order():
+    submitted_order = _fake_order()
+    pending_order = _fake_order(status=OrderStatus.NEW)
+
+    with patch.object(executor, "_client") as mock_client:
+        mock_client.get_order_by_id.return_value = pending_order
+        with patch.object(executor, "time") as mock_time, patch.object(executor, "send_telegram") as mock_notify:
+            result = executor.wait_for_order_fill(submitted_order, timeout_seconds=0.05, poll_interval_seconds=0.02)
+
+    assert result is None
+    assert mock_client.get_order_by_id.call_count == 2  # 0.05 // 0.02 = 2 Versuche
+    mock_notify.assert_called_once()
+
+
+def test_wait_for_order_fill_returns_none_when_order_rejected():
+    submitted_order = _fake_order()
+    rejected_order = _fake_order(status=OrderStatus.REJECTED)
+
+    with patch.object(executor, "_client") as mock_client:
+        mock_client.get_order_by_id.return_value = rejected_order
+        with patch.object(executor, "time") as mock_time, patch.object(executor, "send_telegram") as mock_notify:
+            result = executor.wait_for_order_fill(submitted_order, timeout_seconds=30, poll_interval_seconds=2)
+
+    assert result is None
+    mock_client.get_order_by_id.assert_called_once()
+    mock_notify.assert_called_once()
+
+
+def test_wait_for_order_fill_returns_none_when_order_canceled():
+    submitted_order = _fake_order()
+    canceled_order = _fake_order(status=OrderStatus.CANCELED)
+
+    with patch.object(executor, "_client") as mock_client:
+        mock_client.get_order_by_id.return_value = canceled_order
+        with patch.object(executor, "time") as mock_time, patch.object(executor, "send_telegram") as mock_notify:
+            result = executor.wait_for_order_fill(submitted_order, timeout_seconds=30, poll_interval_seconds=2)
+
+    assert result is None
+    mock_notify.assert_called_once()
+
+
+def test_wait_for_order_fill_returns_none_when_order_is_none():
+    with patch.object(executor, "_client") as mock_client:
+        result = executor.wait_for_order_fill(None)
+
+    assert result is None
+    mock_client.get_order_by_id.assert_not_called()
+
+
+def test_wait_for_order_fill_recovers_from_transient_api_errors():
+    """Ein voruebergehender Fehler beim Status-Abruf darf nicht sofort abbrechen,
+    solange noch Versuche/Zeit uebrig sind."""
+    submitted_order = _fake_order()
+    filled_order = _fake_filled_order()
+
+    with patch.object(executor, "_client") as mock_client:
+        mock_client.get_order_by_id.side_effect = [Exception("network hiccup"), filled_order]
+        with patch.object(executor, "time") as mock_time, patch.object(executor, "send_telegram"):
+            result = executor.wait_for_order_fill(submitted_order, timeout_seconds=30, poll_interval_seconds=2)
+
+    assert result is filled_order
+    assert mock_client.get_order_by_id.call_count == 2
+
+
+def test_close_position_returns_order_on_success():
+    order = MagicMock()
+    with patch.object(executor, "_client") as mock_client:
+        mock_client.close_position.return_value = order
+        with patch.object(executor, "send_telegram"):
+            result = executor.close_position("NVDA")
+
+    assert result is order

@@ -20,18 +20,29 @@ def _fake_position(qty: float, avg_entry_price: float):
     return position
 
 
+def _fake_filled_order(filled_qty: float, filled_avg_price: float):
+    """Simuliert eine von executor.wait_for_order_fill() bestaetigte, gefuellte Order."""
+    order = MagicMock()
+    order.filled_qty = filled_qty
+    order.filled_avg_price = filled_avg_price
+    return order
+
+
 def test_record_trade_pnl_multiplied_by_qty_on_stop_loss_exit():
-    """Regression fuer ZOZ-14: PnL beim Stop-Loss-Exit muss (price - entry) * qty sein, nicht nur price - entry."""
+    """Regression fuer ZOZ-14: PnL beim Stop-Loss-Exit muss (price - entry) * qty sein, nicht nur price - entry.
+    ZOZ-33: PnL basiert jetzt auf der bestaetigten Fill-Qty/Preis, nicht mehr auf current_price/position_qty."""
     entry_price = 100.0
     qty = 10
     current_price = 90.0  # unter Stop-Loss (2%) -> loest Exit aus
+    filled_order = _fake_filled_order(filled_qty=qty, filled_avg_price=current_price)
 
     position = _fake_position(qty=qty, avg_entry_price=entry_price)
 
     with patch.object(main.data, "get_recent_bars", return_value=_fake_df(current_price)), \
          patch.object(main.strategy, "generate_signal", return_value="HOLD"), \
          patch.object(main.executor, "get_open_position", return_value=position), \
-         patch.object(main.executor, "close_position"), \
+         patch.object(main.executor, "close_position", return_value=MagicMock()), \
+         patch.object(main.executor, "wait_for_order_fill", return_value=filled_order), \
          patch.object(main.risk_manager, "can_trade", return_value=True), \
          patch.object(main.risk_manager, "record_trade") as mock_record_trade:
         main.trading_cycle()
@@ -46,13 +57,15 @@ def test_record_trade_pnl_multiplied_by_qty_on_take_profit_exit():
     entry_price = 100.0
     qty = 4
     current_price = 105.0  # ueber Take-Profit (4%) -> loest Exit aus
+    filled_order = _fake_filled_order(filled_qty=qty, filled_avg_price=current_price)
 
     position = _fake_position(qty=qty, avg_entry_price=entry_price)
 
     with patch.object(main.data, "get_recent_bars", return_value=_fake_df(current_price)), \
          patch.object(main.strategy, "generate_signal", return_value="HOLD"), \
          patch.object(main.executor, "get_open_position", return_value=position), \
-         patch.object(main.executor, "close_position"), \
+         patch.object(main.executor, "close_position", return_value=MagicMock()), \
+         patch.object(main.executor, "wait_for_order_fill", return_value=filled_order), \
          patch.object(main.risk_manager, "can_trade", return_value=True), \
          patch.object(main.risk_manager, "record_trade") as mock_record_trade:
         main.trading_cycle()
@@ -61,14 +74,37 @@ def test_record_trade_pnl_multiplied_by_qty_on_take_profit_exit():
     mock_record_trade.assert_called_once_with(pnl=expected_pnl)
 
 
+def test_stop_loss_exit_unfilled_order_does_not_record_trade():
+    """ZOZ-33: Wenn die Stop-Loss-Close-Order nicht bestaetigt wird (Timeout/Ablehnung),
+    darf KEIN record_trade erfolgen - der interne Zustand darf nicht vom Konto abweichen."""
+    entry_price = 100.0
+    qty = 10
+    current_price = 90.0
+
+    position = _fake_position(qty=qty, avg_entry_price=entry_price)
+
+    with patch.object(main.data, "get_recent_bars", return_value=_fake_df(current_price)), \
+         patch.object(main.strategy, "generate_signal", return_value="HOLD"), \
+         patch.object(main.executor, "get_open_position", return_value=position), \
+         patch.object(main.executor, "close_position", return_value=MagicMock()), \
+         patch.object(main.executor, "wait_for_order_fill", return_value=None), \
+         patch.object(main.risk_manager, "can_trade", return_value=True), \
+         patch.object(main.risk_manager, "record_trade") as mock_record_trade:
+        main.trading_cycle()
+
+    mock_record_trade.assert_not_called()
+
+
 def test_buy_signal_without_open_position_places_buy_order():
     current_price = 100.0
+    filled_order = _fake_filled_order(filled_qty=3, filled_avg_price=current_price)
 
     with patch.object(main.data, "get_recent_bars", return_value=_fake_df(current_price)), \
          patch.object(main.strategy, "generate_signal", return_value="BUY"), \
          patch.object(main.executor, "get_open_position", return_value=None), \
          patch.object(main.executor, "get_account_info", return_value={"cash": 100000.0, "portfolio_value": 100000.0, "buying_power": 100000.0}), \
          patch.object(main.executor, "buy", return_value=MagicMock()) as mock_buy, \
+         patch.object(main.executor, "wait_for_order_fill", return_value=filled_order), \
          patch.object(main.risk_manager, "can_trade", return_value=True), \
          patch.object(main.risk_manager, "calculate_position_size", return_value=3), \
          patch.object(main.risk_manager, "record_trade") as mock_record_trade:
@@ -104,6 +140,26 @@ def test_buy_signal_when_order_fails_does_not_record_trade():
          patch.object(main.executor, "get_open_position", return_value=None), \
          patch.object(main.executor, "get_account_info", return_value={"cash": 100000.0, "portfolio_value": 100000.0, "buying_power": 100000.0}), \
          patch.object(main.executor, "buy", return_value=None), \
+         patch.object(main.executor, "wait_for_order_fill") as mock_wait_for_fill, \
+         patch.object(main.risk_manager, "can_trade", return_value=True), \
+         patch.object(main.risk_manager, "calculate_position_size", return_value=3), \
+         patch.object(main.risk_manager, "record_trade") as mock_record_trade:
+        main.trading_cycle()
+
+    mock_wait_for_fill.assert_not_called()  # order ist None -> kein Sinn zu pollen
+    mock_record_trade.assert_not_called()
+
+
+def test_buy_signal_when_order_not_confirmed_does_not_record_trade():
+    """ZOZ-33: Order wurde angenommen, aber nicht (rechtzeitig) gefuellt -> kein record_trade."""
+    current_price = 100.0
+
+    with patch.object(main.data, "get_recent_bars", return_value=_fake_df(current_price)), \
+         patch.object(main.strategy, "generate_signal", return_value="BUY"), \
+         patch.object(main.executor, "get_open_position", return_value=None), \
+         patch.object(main.executor, "get_account_info", return_value={"cash": 100000.0, "portfolio_value": 100000.0, "buying_power": 100000.0}), \
+         patch.object(main.executor, "buy", return_value=MagicMock()), \
+         patch.object(main.executor, "wait_for_order_fill", return_value=None), \
          patch.object(main.risk_manager, "can_trade", return_value=True), \
          patch.object(main.risk_manager, "calculate_position_size", return_value=3), \
          patch.object(main.risk_manager, "record_trade") as mock_record_trade:
@@ -209,14 +265,39 @@ def test_record_trade_pnl_multiplied_by_qty_on_sell_signal_exit():
 
     position = _fake_position(qty=qty, avg_entry_price=entry_price)
     order = MagicMock()
+    filled_order = _fake_filled_order(filled_qty=qty, filled_avg_price=current_price)
 
     with patch.object(main.data, "get_recent_bars", return_value=_fake_df(current_price)), \
          patch.object(main.strategy, "generate_signal", return_value="SELL"), \
          patch.object(main.executor, "get_open_position", return_value=position), \
          patch.object(main.executor, "sell", return_value=order), \
+         patch.object(main.executor, "wait_for_order_fill", return_value=filled_order) as mock_wait_for_fill, \
          patch.object(main.risk_manager, "can_trade", return_value=True), \
          patch.object(main.risk_manager, "record_trade") as mock_record_trade:
         main.trading_cycle()
 
+    mock_wait_for_fill.assert_called_once_with(order)
     expected_pnl = (current_price - entry_price) * qty
     mock_record_trade.assert_called_once_with(pnl=expected_pnl)
+
+
+def test_sell_signal_exit_unfilled_order_does_not_record_trade():
+    """ZOZ-33: Sell-Order angenommen, aber nicht bestaetigt gefuellt -> kein record_trade,
+    interner Zustand darf nicht vom tatsaechlichen Konto abweichen."""
+    entry_price = 50.0
+    qty = 7
+    current_price = 51.0
+
+    position = _fake_position(qty=qty, avg_entry_price=entry_price)
+    order = MagicMock()
+
+    with patch.object(main.data, "get_recent_bars", return_value=_fake_df(current_price)), \
+         patch.object(main.strategy, "generate_signal", return_value="SELL"), \
+         patch.object(main.executor, "get_open_position", return_value=position), \
+         patch.object(main.executor, "sell", return_value=order), \
+         patch.object(main.executor, "wait_for_order_fill", return_value=None), \
+         patch.object(main.risk_manager, "can_trade", return_value=True), \
+         patch.object(main.risk_manager, "record_trade") as mock_record_trade:
+        main.trading_cycle()
+
+    mock_record_trade.assert_not_called()

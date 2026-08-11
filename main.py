@@ -69,18 +69,26 @@ def trading_cycle():
             qty = risk_manager.calculate_position_size(current_price, buying_power=account["buying_power"])
         if qty > 0:
             order = executor.buy(config.SYMBOL, qty)
-            if order:
+            filled_order = executor.wait_for_order_fill(order) if order else None
+            if filled_order:
                 risk_manager.record_trade()
-                stop_loss = risk_manager.get_stop_loss_price(current_price)
-                take_profit = risk_manager.get_take_profit_price(current_price)
-                logger.info(f"Eingestiegen bei {current_price:.2f}. Stop-Loss: {stop_loss}, Take-Profit: {take_profit}")
+                fill_price = float(filled_order.filled_avg_price)
+                stop_loss = risk_manager.get_stop_loss_price(fill_price)
+                take_profit = risk_manager.get_take_profit_price(fill_price)
+                logger.info(
+                    f"Eingestiegen bei {fill_price:.2f} (filled_qty={filled_order.filled_qty}). "
+                    f"Stop-Loss: {stop_loss}, Take-Profit: {take_profit}"
+                )
 
     elif signal_type == "SELL" and position is not None:
         qty = int(float(position.qty))
         entry_price = float(position.avg_entry_price)
         order = executor.sell(config.SYMBOL, qty)
-        if order:
-            risk_manager.record_trade(pnl=(current_price - entry_price) * qty)
+        filled_order = executor.wait_for_order_fill(order) if order else None
+        if filled_order:
+            filled_qty = float(filled_order.filled_qty)
+            filled_price = float(filled_order.filled_avg_price)
+            risk_manager.record_trade(pnl=(filled_price - entry_price) * filled_qty)
             position_closed_this_cycle = True
 
     else:
@@ -96,12 +104,20 @@ def trading_cycle():
 
         if current_price <= stop_loss:
             logger.warning(f"Stop-Loss ausgelöst bei {current_price:.2f} (Einstieg war {entry_price:.2f})")
-            executor.close_position(config.SYMBOL)
-            risk_manager.record_trade(pnl=(current_price - entry_price) * position_qty)
+            close_order = executor.close_position(config.SYMBOL)
+            filled_order = executor.wait_for_order_fill(close_order) if close_order else None
+            if filled_order:
+                filled_qty = float(filled_order.filled_qty)
+                filled_price = float(filled_order.filled_avg_price)
+                risk_manager.record_trade(pnl=(filled_price - entry_price) * filled_qty)
         elif current_price >= take_profit:
             logger.info(f"Take-Profit ausgelöst bei {current_price:.2f} (Einstieg war {entry_price:.2f})")
-            executor.close_position(config.SYMBOL)
-            risk_manager.record_trade(pnl=(current_price - entry_price) * position_qty)
+            close_order = executor.close_position(config.SYMBOL)
+            filled_order = executor.wait_for_order_fill(close_order) if close_order else None
+            if filled_order:
+                filled_qty = float(filled_order.filled_qty)
+                filled_price = float(filled_order.filled_avg_price)
+                risk_manager.record_trade(pnl=(filled_price - entry_price) * filled_qty)
 
 
 def main():

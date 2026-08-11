@@ -62,8 +62,14 @@ def validate_config():
         if confirm != "JA":
             raise SystemExit("Abgebrochen.")
  
-# --- Erweiterte Strategie-Parameter (Trendfilter & Rauschfilter) --- 
-TREND_WINDOW = 100 
-MIN_CROSSOVER_MARGIN_PCT = 0.0002 
-COOLDOWN_MINUTES = 30 
+# --- Erweiterte Strategie-Parameter (Trendfilter & Rauschfilter) ---
+TREND_WINDOW = 100
+MIN_CROSSOVER_MARGIN_PCT = 0.0002
+COOLDOWN_MINUTES = 30
 MAX_RISK_PER_TRADE_USD = 100.0
+
+# --- Fill-Bestaetigung (ZOZ-33) ---
+# Wie lange/oft nach einer Order auf den Fill-Status gepollt wird, bevor
+# der Bot den Versuch als Timeout wertet (kein record_trade mehr).
+ORDER_FILL_TIMEOUT_SECONDS = 30
+ORDER_FILL_POLL_INTERVAL_SECONDS = 2
