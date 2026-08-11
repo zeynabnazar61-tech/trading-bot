@@ -239,6 +239,48 @@ def test_wait_for_order_fill_times_out_but_returns_partial_fill_when_partially_f
     mock_notify.assert_called_once()
 
 
+def test_wait_for_order_fill_cancels_rest_order_when_partially_filled_timeout():
+    """ZOZ-38: Bei PARTIALLY_FILLED-Timeout muss die Restmenge aktiv storniert werden,
+    BEVOR der Teil-Fill an den Aufrufer zurueckgegeben wird - sonst bleibt die Rest-Order
+    unbeobachtet offen am Broker liegen (Race-Bedingung/Genauigkeitsluecke)."""
+    submitted_order = _fake_order()
+    partially_filled_order = _fake_order(status=OrderStatus.PARTIALLY_FILLED)
+    partially_filled_order.filled_qty = "3"
+    partially_filled_order.filled_avg_price = "123.45"
+
+    with patch.object(executor, "_client") as mock_client:
+        mock_client.get_order_by_id.return_value = partially_filled_order
+        with patch.object(executor, "time") as mock_time, patch.object(executor, "send_telegram") as mock_notify:
+            result = executor.wait_for_order_fill(submitted_order, timeout_seconds=0.05, poll_interval_seconds=0.02)
+
+    assert result is partially_filled_order
+    mock_client.cancel_order_by_id.assert_called_once_with(submitted_order.id)
+    # Kein zusaetzlicher Telegram-Alarm, wenn die Stornierung erfolgreich war.
+    mock_notify.assert_called_once()
+
+
+def test_wait_for_order_fill_logs_and_notifies_when_cancel_of_rest_order_fails():
+    """Stornierung der Rest-Order kann fehlschlagen (z.B. weil sie zwischenzeitlich
+    doch noch vollstaendig gefuellt hat) - das muss sauber geloggt/benachrichtigt
+    werden, ohne den Teil-Fill-Rueckgabewert zu veraendern."""
+    submitted_order = _fake_order()
+    partially_filled_order = _fake_order(status=OrderStatus.PARTIALLY_FILLED)
+    partially_filled_order.filled_qty = "3"
+    partially_filled_order.filled_avg_price = "123.45"
+
+    with patch.object(executor, "_client") as mock_client:
+        mock_client.get_order_by_id.return_value = partially_filled_order
+        mock_client.cancel_order_by_id.side_effect = Exception("order already filled")
+        with patch.object(executor, "time") as mock_time, patch.object(executor, "send_telegram") as mock_notify:
+            result = executor.wait_for_order_fill(submitted_order, timeout_seconds=0.05, poll_interval_seconds=0.02)
+
+    assert result is partially_filled_order
+    mock_client.cancel_order_by_id.assert_called_once_with(submitted_order.id)
+    # Ein Alarm fuer den Teil-Fill selbst, plus ein zweiter fuer den fehlgeschlagenen Storno-Versuch.
+    assert mock_notify.call_count == 2
+    assert "Stornieren" in mock_notify.call_args[0][0]
+
+
 def test_wait_for_order_fill_times_out_without_any_fill_returns_none():
     """Timeout mit PARTIALLY_FILLED aber filled_qty=0 (z.B. Order gerade erst akzeptiert,
     Feld noch nicht gesetzt) darf keinen Trade vortaeuschen -> weiterhin None."""

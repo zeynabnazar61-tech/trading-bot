@@ -87,8 +87,10 @@ def wait_for_order_fill(order, timeout_seconds: float = None, poll_interval_seco
     filled_qty/filled_avg_price) zurueckgegeben, statt sie zu verwerfen -
     sonst weichen trades_today/daily_pnl im RiskManager vom echten
     Broker-Kontostand ab. Der Aufrufer erfasst dann einen Trade mit der
-    (Teil-)Fuellmenge; die Restmenge bleibt als offene Order am Broker
-    bestehen und muss ggf. separat beobachtet werden.
+    (Teil-)Fuellmenge. Die Restmenge wird dabei aktiv storniert (bevor der
+    Teil-Fill zurueckgegeben wird), damit die Order eindeutig storniert statt
+    unbeobachtet offen am Broker liegt - das verhindert ueberlappende Orders,
+    falls der Aufrufer im naechsten Zyklus erneut close_position() aufruft.
     """
     if order is None or getattr(order, "id", None) is None:
         return None
@@ -142,6 +144,16 @@ def wait_for_order_fill(order, timeout_seconds: float = None, poll_interval_seco
         )
         logger.warning(msg)
         send_telegram(msg)
+        try:
+            _client.cancel_order_by_id(order_id)
+            logger.info(f"Rest-Order {order_id} nach Teil-Fill-Timeout storniert.")
+        except Exception as e:
+            cancel_err_msg = (
+                f"FEHLER beim Stornieren der Rest-Order {order_id} nach Teil-Fill-Timeout: {e} "
+                "-> Rest-Order-Status manuell pruefen (moeglicherweise zwischenzeitlich vollstaendig gefuellt)."
+            )
+            logger.error(cancel_err_msg)
+            send_telegram(cancel_err_msg)
         return last_known_order
 
     msg = (
