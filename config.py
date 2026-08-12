@@ -28,7 +28,7 @@ SHORT_WINDOW = 20            # kurzer gleitender Durchschnitt
 LONG_WINDOW = 50             # langer gleitender Durchschnitt
 
 # --- Risikomanagement (WICHTIGSTER TEIL!) ---
-MAX_POSITION_SIZE_USD = 500.0     # max. Kapital pro Position
+MAX_POSITION_SIZE_USD = 5000.0    # max. Kapital pro Position
 STOP_LOSS_PCT = 0.02              # 2% Stop-Loss pro Trade
 TAKE_PROFIT_PCT = 0.04            # 4% Take-Profit pro Trade
 # Maximaler erlaubter Tagesverlust: Der Bot stoppt sich selbst, sobald der
@@ -73,3 +73,9 @@ MAX_RISK_PER_TRADE_USD = 100.0
 # der Bot den Versuch als Timeout wertet (kein record_trade mehr).
 ORDER_FILL_TIMEOUT_SECONDS = 30
 ORDER_FILL_POLL_INTERVAL_SECONDS = 2
+
+# --- Trailing-Stop-Vergleichsvariante (ZOZ-40, NUR Backtest, nicht live) ---
+# Wird ausschliesslich von strategy_trailing.py / backtest_trailing.py genutzt.
+# Bestehende Konstanten (STOP_LOSS_PCT, TAKE_PROFIT_PCT, MAX_DAILY_LOSS_USD, ...)
+# bleiben unveraendert.
+TRAILING_STOP_PCT = 0.05          # 5% unter dem Hoch seit Einstieg -> Exit
