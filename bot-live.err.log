@@ -1,0 +1,23 @@
+2026-08-12 14:45:38,090 - INFO - Gespeicherter Risk-State stammt von einem frueheren Tag -> starte neuen Tag.
+2026-08-12 14:45:38,095 - INFO - Bot gestartet. Symbol: NVDA, Paper-Trading: True
+2026-08-12 14:45:44,104 - INFO - Kontostand: {'cash': 100000.0, 'portfolio_value': 100000.0, 'buying_power': 400000.0}
+2026-08-12 14:45:46,897 - INFO - Nicht genug Daten fuer ein Signal -> HOLD
+2026-08-12 14:45:47,105 - INFO - Kein Handlungsbedarf (Signal: HOLD, Position vorhanden: False)
+2026-08-12 14:46:47,347 - INFO - Nicht genug Daten fuer ein Signal -> HOLD
+2026-08-12 14:46:47,498 - INFO - Kein Handlungsbedarf (Signal: HOLD, Position vorhanden: False)
+2026-08-12 14:47:47,859 - INFO - Nicht genug Daten fuer ein Signal -> HOLD
+2026-08-12 14:47:48,144 - INFO - Kein Handlungsbedarf (Signal: HOLD, Position vorhanden: False)
+2026-08-12 14:48:48,805 - INFO - Nicht genug Daten fuer ein Signal -> HOLD
+2026-08-12 14:48:49,229 - INFO - Kein Handlungsbedarf (Signal: HOLD, Position vorhanden: False)
+2026-08-12 14:49:49,677 - INFO - Nicht genug Daten fuer ein Signal -> HOLD
+2026-08-12 14:49:50,353 - INFO - Kein Handlungsbedarf (Signal: HOLD, Position vorhanden: False)
+2026-08-12 14:50:50,563 - INFO - Nicht genug Daten fuer ein Signal -> HOLD
+2026-08-12 14:50:50,715 - INFO - Kein Handlungsbedarf (Signal: HOLD, Position vorhanden: False)
+2026-08-12 14:51:50,959 - INFO - Nicht genug Daten fuer ein Signal -> HOLD
+2026-08-12 14:51:51,353 - INFO - Kein Handlungsbedarf (Signal: HOLD, Position vorhanden: False)
+2026-08-12 14:52:51,547 - INFO - Nicht genug Daten fuer ein Signal -> HOLD
+2026-08-12 14:52:51,701 - INFO - Kein Handlungsbedarf (Signal: HOLD, Position vorhanden: False)
+2026-08-12 14:53:51,920 - INFO - Nicht genug Daten fuer ein Signal -> HOLD
+2026-08-12 14:53:52,063 - INFO - Kein Handlungsbedarf (Signal: HOLD, Position vorhanden: False)
+2026-08-12 14:54:52,243 - INFO - Nicht genug Daten fuer ein Signal -> HOLD
+2026-08-12 14:54:52,420 - INFO - Kein Handlungsbedarf (Signal: HOLD, Position vorhanden: False)

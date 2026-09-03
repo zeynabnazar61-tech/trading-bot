@@ -20,7 +20,11 @@ if SENTRY_DSN:
     sentry_sdk.init(dsn=SENTRY_DSN, traces_sample_rate=0.0, environment="paper" if ALPACA_PAPER else "live")
 
 # --- Handelsparameter ---
-SYMBOL = "NVDA"              # Welche Aktie gehandelt wird
+SYMBOLS = ["AAPL", "XOM", "SPY", "JNJ"]  # Aktien, die der Bot gleichzeitig beobachtet/handelt
+# Bewusst aus unterschiedlichen Sektoren gewaehlt (Tech, Energie, Breiter Markt, Gesundheit),
+# damit nicht alle Positionen bei einem schlechten Markttag gleichzeitig fallen.
+# (MSFT durch XOM ersetzt: AAPL+MSFT waren beide Tech und stark korreliert -> kaum echte Diversifikation.)
+SYMBOL = SYMBOLS[0]          # Rueckwaertskompatibel: Standard-Symbol fuer Backtest/Tests (nur 1 Symbol)
 TIMEFRAME_MINUTES = 15       # Kerzen-Zeitrahmen für die Strategie
 
 # --- Strategie: Moving Average Crossover ---
@@ -30,7 +34,7 @@ LONG_WINDOW = 50             # langer gleitender Durchschnitt
 # --- Risikomanagement (WICHTIGSTER TEIL!) ---
 MAX_POSITION_SIZE_USD = 5000.0    # max. Kapital pro Position
 STOP_LOSS_PCT = 0.02              # 2% Stop-Loss pro Trade
-TAKE_PROFIT_PCT = 0.04            # 4% Take-Profit pro Trade
+TAKE_PROFIT_PCT = 0.08            # 8% Take-Profit pro Trade
 # Maximaler erlaubter Tagesverlust: Der Bot stoppt sich selbst, sobald der
 # kumulierte Verlust an einem Tag 100 USD erreicht. Ein konservativer Wert
 # begrenzt das Risiko einzelner schlechter Handelstage und schützt Kapital.

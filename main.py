@@ -41,14 +41,26 @@ signal.signal(signal.SIGTERM, _handle_shutdown)
 
 
 def trading_cycle():
-    """Ein einzelner Durchlauf der Handelslogik."""
+    """Ein einzelner Durchlauf der Handelslogik ueber alle beobachteten Symbole.
+
+    Risikolimits (Tagesverlust, max. Trades/Tag, Cooldown) gelten global fuer
+    den gesamten Bot, nicht pro Symbol -> daher der can_trade()-Check sowohl
+    einmal vor der Schleife (spart Marktdaten-Abrufe, wenn ohnehin gestoppt)
+    als auch erneut vor jeder einzelnen Kauf-/Verkaufsaktion pro Symbol.
+    """
     if not risk_manager.can_trade():
         return
 
+    for symbol in config.SYMBOLS:
+        trade_symbol(symbol)
+
+
+def trade_symbol(symbol: str):
+    """Handelslogik fuer ein einzelnes Symbol innerhalb eines Zyklus."""
     try:
-        df = data.get_recent_bars(config.SYMBOL)
+        df = data.get_recent_bars(symbol)
     except Exception as e:
-        logger.error(f"Konnte Marktdaten nicht abrufen, überspringe Zyklus: {e}")
+        logger.error(f"[{symbol}] Konnte Marktdaten nicht abrufen, überspringe: {e}")
         return
 
     if df.empty:
@@ -56,19 +68,19 @@ def trading_cycle():
 
     signal_type = strategy.generate_signal(df)
     current_price = float(df["close"].iloc[-1])
-    position = executor.get_open_position(config.SYMBOL)
+    position = executor.get_open_position(symbol)
 
     position_closed_this_cycle = False
 
-    if signal_type == "BUY" and position is None:
+    if signal_type == "BUY" and position is None and risk_manager.can_trade():
         account = executor.get_account_info()
         if account is None:
-            logger.error("Konnte Kontodaten nicht abrufen -> Kauf sicherheitshalber uebersprungen (fail-safe).")
+            logger.error(f"[{symbol}] Konnte Kontodaten nicht abrufen -> Kauf sicherheitshalber uebersprungen (fail-safe).")
             qty = 0
         else:
             qty = risk_manager.calculate_position_size(current_price, buying_power=account["buying_power"])
         if qty > 0:
-            order = executor.buy(config.SYMBOL, qty)
+            order = executor.buy(symbol, qty)
             filled_order = executor.wait_for_order_fill(order) if order else None
             if filled_order:
                 risk_manager.record_trade()
@@ -76,14 +88,14 @@ def trading_cycle():
                 stop_loss = risk_manager.get_stop_loss_price(fill_price)
                 take_profit = risk_manager.get_take_profit_price(fill_price)
                 logger.info(
-                    f"Eingestiegen bei {fill_price:.2f} (filled_qty={filled_order.filled_qty}). "
+                    f"[{symbol}] Eingestiegen bei {fill_price:.2f} (filled_qty={filled_order.filled_qty}). "
                     f"Stop-Loss: {stop_loss}, Take-Profit: {take_profit}"
                 )
 
     elif signal_type == "SELL" and position is not None:
         qty = int(float(position.qty))
         entry_price = float(position.avg_entry_price)
-        order = executor.sell(config.SYMBOL, qty)
+        order = executor.sell(symbol, qty)
         filled_order = executor.wait_for_order_fill(order) if order else None
         if filled_order:
             filled_qty = float(filled_order.filled_qty)
@@ -92,27 +104,26 @@ def trading_cycle():
             position_closed_this_cycle = True
 
     else:
-        logger.info(f"Kein Handlungsbedarf (Signal: {signal_type}, Position vorhanden: {position is not None})")
+        logger.info(f"[{symbol}] Kein Handlungsbedarf (Signal: {signal_type}, Position vorhanden: {position is not None})")
 
     # Stop-Loss / Take-Profit prüfen, falls Position offen ist (und nicht bereits
     # in diesem Zyklus per SELL-Signal geschlossen wurde, sonst doppelte PnL-Erfassung)
     if position is not None and not position_closed_this_cycle:
         entry_price = float(position.avg_entry_price)
-        position_qty = int(float(position.qty))
         stop_loss = risk_manager.get_stop_loss_price(entry_price)
         take_profit = risk_manager.get_take_profit_price(entry_price)
 
         if current_price <= stop_loss:
-            logger.warning(f"Stop-Loss ausgelöst bei {current_price:.2f} (Einstieg war {entry_price:.2f})")
-            close_order = executor.close_position(config.SYMBOL)
+            logger.warning(f"[{symbol}] Stop-Loss ausgelöst bei {current_price:.2f} (Einstieg war {entry_price:.2f})")
+            close_order = executor.close_position(symbol)
             filled_order = executor.wait_for_order_fill(close_order) if close_order else None
             if filled_order:
                 filled_qty = float(filled_order.filled_qty)
                 filled_price = float(filled_order.filled_avg_price)
                 risk_manager.record_trade(pnl=(filled_price - entry_price) * filled_qty)
         elif current_price >= take_profit:
-            logger.info(f"Take-Profit ausgelöst bei {current_price:.2f} (Einstieg war {entry_price:.2f})")
-            close_order = executor.close_position(config.SYMBOL)
+            logger.info(f"[{symbol}] Take-Profit ausgelöst bei {current_price:.2f} (Einstieg war {entry_price:.2f})")
+            close_order = executor.close_position(symbol)
             filled_order = executor.wait_for_order_fill(close_order) if close_order else None
             if filled_order:
                 filled_qty = float(filled_order.filled_qty)
@@ -122,8 +133,9 @@ def trading_cycle():
 
 def main():
     config.validate_config()
-    logger.info(f"Bot gestartet. Symbol: {config.SYMBOL}, Paper-Trading: {config.ALPACA_PAPER}")
-    send_telegram(f"🤖 Trading-Bot gestartet (Symbol: {config.SYMBOL}, Paper: {config.ALPACA_PAPER})")
+    symbols_str = ", ".join(config.SYMBOLS)
+    logger.info(f"Bot gestartet. Symbole: {symbols_str}, Paper-Trading: {config.ALPACA_PAPER}")
+    send_telegram(f"🤖 Trading-Bot gestartet (Symbole: {symbols_str}, Paper: {config.ALPACA_PAPER})")
 
     account = executor.get_account_info()
     if account:

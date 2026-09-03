@@ -45,7 +45,7 @@ def test_record_trade_pnl_multiplied_by_qty_on_stop_loss_exit():
          patch.object(main.executor, "wait_for_order_fill", return_value=filled_order), \
          patch.object(main.risk_manager, "can_trade", return_value=True), \
          patch.object(main.risk_manager, "record_trade") as mock_record_trade:
-        main.trading_cycle()
+        main.trade_symbol(main.config.SYMBOL)
 
     expected_pnl = (current_price - entry_price) * qty
     mock_record_trade.assert_called_once_with(pnl=expected_pnl)
@@ -56,7 +56,9 @@ def test_record_trade_pnl_multiplied_by_qty_on_stop_loss_exit():
 def test_record_trade_pnl_multiplied_by_qty_on_take_profit_exit():
     entry_price = 100.0
     qty = 4
-    current_price = 105.0  # ueber Take-Profit (4%) -> loest Exit aus
+    # Bewusst dynamisch anhand der aktuellen Config berechnet (statt hartcodiert),
+    # damit der Test nicht bricht, wenn TAKE_PROFIT_PCT angepasst wird.
+    current_price = round(entry_price * (1 + main.config.TAKE_PROFIT_PCT) + 1, 2)  # klar ueber Take-Profit -> loest Exit aus
     filled_order = _fake_filled_order(filled_qty=qty, filled_avg_price=current_price)
 
     position = _fake_position(qty=qty, avg_entry_price=entry_price)
@@ -68,7 +70,7 @@ def test_record_trade_pnl_multiplied_by_qty_on_take_profit_exit():
          patch.object(main.executor, "wait_for_order_fill", return_value=filled_order), \
          patch.object(main.risk_manager, "can_trade", return_value=True), \
          patch.object(main.risk_manager, "record_trade") as mock_record_trade:
-        main.trading_cycle()
+        main.trade_symbol(main.config.SYMBOL)
 
     expected_pnl = (current_price - entry_price) * qty
     mock_record_trade.assert_called_once_with(pnl=expected_pnl)
@@ -130,7 +132,7 @@ def test_buy_signal_without_open_position_places_buy_order():
          patch.object(main.risk_manager, "can_trade", return_value=True), \
          patch.object(main.risk_manager, "calculate_position_size", return_value=3), \
          patch.object(main.risk_manager, "record_trade") as mock_record_trade:
-        main.trading_cycle()
+        main.trade_symbol(main.config.SYMBOL)
 
     mock_buy.assert_called_once_with(main.config.SYMBOL, 3)
     mock_record_trade.assert_called_once_with()
@@ -296,7 +298,7 @@ def test_record_trade_pnl_multiplied_by_qty_on_sell_signal_exit():
          patch.object(main.executor, "wait_for_order_fill", return_value=filled_order) as mock_wait_for_fill, \
          patch.object(main.risk_manager, "can_trade", return_value=True), \
          patch.object(main.risk_manager, "record_trade") as mock_record_trade:
-        main.trading_cycle()
+        main.trade_symbol(main.config.SYMBOL)
 
     mock_wait_for_fill.assert_called_once_with(order)
     expected_pnl = (current_price - entry_price) * qty
@@ -323,3 +325,24 @@ def test_sell_signal_exit_unfilled_order_does_not_record_trade():
         main.trading_cycle()
 
     mock_record_trade.assert_not_called()
+
+
+def test_trading_cycle_processes_every_configured_symbol():
+    """Multi-Symbol: trading_cycle() muss trade_symbol() fuer JEDES Symbol in
+    config.SYMBOLS aufrufen, nicht nur fuer eines."""
+    with patch.object(main, "trade_symbol") as mock_trade_symbol, \
+         patch.object(main.risk_manager, "can_trade", return_value=True):
+        main.trading_cycle()
+
+    called_symbols = [call.args[0] for call in mock_trade_symbol.call_args_list]
+    assert called_symbols == main.config.SYMBOLS
+
+
+def test_trading_cycle_skips_all_symbols_when_cannot_trade():
+    """Wenn can_trade() False liefert, darf kein einziges Symbol verarbeitet werden
+    (globales Risikolimit gilt fuer den gesamten Bot, nicht pro Symbol)."""
+    with patch.object(main, "trade_symbol") as mock_trade_symbol, \
+         patch.object(main.risk_manager, "can_trade", return_value=False):
+        main.trading_cycle()
+
+    mock_trade_symbol.assert_not_called()

@@ -1,0 +1,38 @@
+name: Krypto-Advisor
+
+on:
+  schedule:
+    # Stuendlich - der Fear & Greed Index selbst aktualisiert sich nur ca. 1x/Tag,
+    # haeufigeres Pruefen schadet aber nicht (kostenlose, oeffentliche APIs).
+    - cron: "0 * * * *"
+  workflow_dispatch: {}   # erlaubt manuelles Starten ueber den "Run workflow" Button
+
+permissions:
+  contents: write   # noetig, um den Empfehlungs-Stand (state-Datei) zurueckzucommiten
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Abhaengigkeiten installieren
+        run: pip install -r requirements-crypto.txt
+
+      - name: Krypto-Advisor ausfuehren
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: python crypto_advisor.py --once
+
+      - name: Empfehlungs-Stand committen (falls geaendert)
+        run: |
+          git config user.name "crypto-advisor-bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add logs/crypto_advisor_state.json
+          git diff --staged --quiet || git commit -m "Update crypto advisor state [skip ci]"
+          git push

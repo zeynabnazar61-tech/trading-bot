@@ -11,7 +11,7 @@ import config
 
 _client = StockHistoricalDataClient(config.ALPACA_API_KEY, config.ALPACA_SECRET_KEY)
 
-def get_recent_bars(symbol: str = config.SYMBOL, lookback_days: int = 5) -> pd.DataFrame:
+def get_recent_bars(symbol: str = config.SYMBOL, lookback_days: int = 10) -> pd.DataFrame:
     """
     Holt die letzten Kerzen (Bars) fuer ein Symbol.
     Gibt ein DataFrame mit Spalten: open, high, low, close, volume zurueck.

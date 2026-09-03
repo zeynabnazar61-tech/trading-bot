@@ -63,7 +63,9 @@ ALPACA_PAPER=true
 ### 4. Strategie-Parameter anpassen (optional)
 
 Alle Einstellungen in `config.py`:
-- `SYMBOL` - welche Aktie gehandelt wird
+- `SYMBOLS` - Liste der Aktien, die gleichzeitig beobachtet/gehandelt werden (z.B. `["AAPL", "MSFT", "SPY", "JNJ"]`).
+  Risikolimits (Tagesverlust, max. Trades/Tag, Cooldown) gelten global für den
+  gesamten Bot, nicht pro Aktie einzeln.
 - `SHORT_WINDOW` / `LONG_WINDOW` - Moving-Average-Perioden
 - `MAX_POSITION_SIZE_USD` - maximales Kapital pro Position
 - `STOP_LOSS_PCT` / `TAKE_PROFIT_PCT` - Risikogrenzen pro Trade
@@ -129,6 +131,20 @@ journalctl -u trading-bot -f         # Live-Logs ansehen
 ```
 
 `Restart=always` sorgt dafür, dass der Bot bei einem Absturz automatisch neu startet.
+
+## Sicherheits-Check der Abhängigkeiten
+
+Vor jedem Deployment (besonders vor einem Wechsel zu Live-Trading) auf bekannte
+Sicherheitslücken in den genutzten Bibliotheken prüfen:
+
+```bash
+pip install -r requirements-dev.txt
+pip-audit
+```
+
+Meldet `pip-audit` eine Lücke, die betroffene Bibliothek in `requirements.txt`
+auf eine gepatchte Version aktualisieren und den Bot danach erneut testen,
+bevor weitergemacht wird.
 
 ## Telegram-Benachrichtigungen (optional)
 

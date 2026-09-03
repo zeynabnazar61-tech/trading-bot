@@ -37,18 +37,25 @@ def run_backtest(symbol: str, days: int, starting_cash: float = 10000.0):
         signal_type = generate_signal(window_df)
         price = float(window_df["close"].iloc[-1])
 
+        if position_qty > 0:
+            stop_price = entry_price * (1 - config.STOP_LOSS_PCT)
+            target_price = entry_price * (1 + config.TAKE_PROFIT_PCT)
+            if price <= stop_price or price >= target_price:
+                proceeds = position_qty * price
+                cash += proceeds
+                trades.append((price - entry_price) * position_qty)
+                position_qty = 0
+            elif signal_type == "SELL":
+                proceeds = position_qty * price
+                cash += proceeds
+                trades.append((price - entry_price) * position_qty)
+                position_qty = 0
+
         if signal_type == "BUY" and position_qty == 0:
             position_qty = int(config.MAX_POSITION_SIZE_USD // price)
             if position_qty > 0:
                 cash -= position_qty * price
                 entry_price = price
-
-        elif signal_type == "SELL" and position_qty > 0:
-            proceeds = position_qty * price
-            cash += proceeds
-            pnl = (price - entry_price) * position_qty
-            trades.append(pnl)
-            position_qty = 0
 
         current_equity = cash + (position_qty * price)
         equity_curve.append(current_equity)
