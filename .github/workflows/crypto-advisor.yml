@@ -1,4 +1,5 @@
 name: Krypto-Advisor
+# Trigger-Reindexierung: GitHub hat den Workflow beim ersten Push nicht erkannt.
 
 on:
   schedule:
