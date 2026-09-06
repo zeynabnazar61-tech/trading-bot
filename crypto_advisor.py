@@ -17,6 +17,7 @@ import signal
 import sys
 import time
 
+import pandas as pd
 import requests
 
 from logger_setup import get_logger
@@ -27,6 +28,15 @@ logger = get_logger("crypto_advisor")
 COINS = {"bitcoin": "BTC", "ethereum": "ETH", "solana": "SOL"}
 CHECK_INTERVAL_SECONDS = 60 * 60  # Fear & Greed Index aktualisiert sich nur 1x/Tag
 STATE_FILE = "logs/crypto_advisor_state.json"
+
+# --- Pro-Coin-Signal (SMA-Crossover + Trendfilter, taegliche Kurse) ---
+# Eigene, kleinere Fenster als beim Aktien-Bot (strategy.py), weil hier mit
+# TAEGLICHEN statt 15-Minuten-Kerzen gerechnet wird.
+COIN_SHORT_WINDOW = 10
+COIN_LONG_WINDOW = 30
+COIN_TREND_WINDOW = 50
+COIN_MIN_CROSSOVER_MARGIN_PCT = 0.005  # 0.5%, groesser als bei Aktien (Krypto ist volatiler)
+COIN_HISTORY_DAYS = 90  # taeglich, genug fuer TREND_WINDOW=50 + Puffer
 
 _running = True
 
@@ -62,7 +72,7 @@ def get_prices():
 
 
 def get_recommendation(value: int) -> str:
-    """Leitet aus dem Fear & Greed Wert eine einfache Empfehlung ab."""
+    """Leitet aus dem Fear & Greed Wert eine einfache, marktweite Empfehlung ab."""
     if value <= 25:
         return "BUY"
     if value >= 75:
@@ -70,55 +80,131 @@ def get_recommendation(value: int) -> str:
     return "HOLD"
 
 
-def load_last_recommendation():
+def get_coin_history(coin_id: str) -> pd.DataFrame:
+    """Holt taegliche Schlusskurse eines Coins (fuer SMA-Berechnung)."""
+    url = (
+        f"https://api.coingecko.com/api/v3/coins/{coin_id}/market_chart"
+        f"?vs_currency=usd&days={COIN_HISTORY_DAYS}&interval=daily"
+    )
+    response = requests.get(url, timeout=10)
+    response.raise_for_status()
+    prices = response.json()["prices"]  # [[timestamp_ms, price], ...]
+    return pd.DataFrame({"close": [p[1] for p in prices]})
+
+
+def get_coin_signal(coin_id: str) -> str:
+    """SMA-Crossover mit Trendfilter pro Coin - eigenstaendige, einfachere
+    Variante von strategy.py, aber auf taegliche Krypto-Kurse zugeschnitten."""
+    df = get_coin_history(coin_id)
+    min_len = COIN_TREND_WINDOW + 1
+    if len(df) < min_len:
+        return "HOLD"
+
+    df["sma_short"] = df["close"].rolling(window=COIN_SHORT_WINDOW).mean()
+    df["sma_long"] = df["close"].rolling(window=COIN_LONG_WINDOW).mean()
+    df["sma_trend"] = df["close"].rolling(window=COIN_TREND_WINDOW).mean()
+
+    prev_short, prev_long = df["sma_short"].iloc[-2], df["sma_long"].iloc[-2]
+    curr_short, curr_long = df["sma_short"].iloc[-1], df["sma_long"].iloc[-1]
+    curr_price = df["close"].iloc[-1]
+    curr_trend = df["sma_trend"].iloc[-1]
+
+    if pd.isna(prev_short) or pd.isna(prev_long) or pd.isna(curr_trend):
+        return "HOLD"
+
+    crossed_up = prev_short <= prev_long and curr_short > curr_long
+    crossed_down = prev_short >= prev_long and curr_short < curr_long
+
+    gap_pct = abs(curr_short - curr_long) / curr_long if curr_long else 0
+    if gap_pct < COIN_MIN_CROSSOVER_MARGIN_PCT:
+        return "HOLD"
+
+    uptrend = curr_price > curr_trend
+    downtrend = curr_price < curr_trend
+
+    if crossed_up and uptrend:
+        return "BUY"
+    if crossed_down and downtrend:
+        return "SELL"
+    return "HOLD"
+
+
+def get_coin_signals() -> dict:
+    """Pro-Coin-Signale, Fehler bei einem Coin duerfen die anderen nicht stoppen."""
+    signals = {}
+    for coin_id in COINS:
+        try:
+            signals[coin_id] = get_coin_signal(coin_id)
+        except Exception as e:
+            logger.warning(f"Konnte Signal fuer {coin_id} nicht berechnen: {e}")
+            signals[coin_id] = "HOLD"
+    return signals
+
+
+def load_last_state():
     if not os.path.exists(STATE_FILE):
-        return None
+        return None, {}
     try:
         with open(STATE_FILE, "r") as f:
-            return json.load(f).get("last_recommendation")
+            data = json.load(f)
+            return data.get("last_recommendation"), data.get("last_coin_signals", {})
     except (json.JSONDecodeError, OSError):
-        return None
+        return None, {}
 
 
-def save_last_recommendation(recommendation: str) -> None:
+def save_last_state(recommendation: str, coin_signals: dict) -> None:
     os.makedirs(os.path.dirname(STATE_FILE), exist_ok=True)
     with open(STATE_FILE, "w") as f:
-        json.dump({"last_recommendation": recommendation}, f)
+        json.dump({"last_recommendation": recommendation, "last_coin_signals": coin_signals}, f)
 
 
-def format_message(value, classification, recommendation, prices) -> str:
+def format_message(value, classification, recommendation, prices, coin_signals) -> str:
     lines = [
-        f"Empfehlung: {recommendation}",
+        f"Markt-Stimmung: {recommendation}",
         f"Fear & Greed Index: {value} ({classification})",
         "",
     ]
+    changes = {}
     for coin_id, symbol in COINS.items():
         info = prices.get(coin_id)
         if info:
             price = info["usd"]
             change = info.get("usd_24h_change", 0)
-            lines.append(f"{symbol}: ${price:,.2f} ({change:+.2f}% 24h)")
+            changes[symbol] = change
+            signal = coin_signals.get(coin_id, "HOLD")
+            lines.append(f"{symbol}: ${price:,.2f} ({change:+.2f}% 24h) | Trend-Signal: {signal}")
+
+    if changes:
+        biggest_drop = min(changes, key=changes.get)
+        biggest_rise = max(changes, key=changes.get)
+        lines.append("")
+        lines.append(f"Groesster 24h-Ruecksetzer: {biggest_drop} ({changes[biggest_drop]:+.2f}%)")
+        lines.append(f"Groesster 24h-Anstieg: {biggest_rise} ({changes[biggest_rise]:+.2f}%)")
+
     return "\n".join(lines)
 
 
 def run_once(force_notify: bool = False):
     """force_notify=True schickt immer eine Telegram-Nachricht, auch wenn sich
-    die Empfehlung nicht geaendert hat (z.B. bei manuell ausgeloesten Laeufen)."""
+    nichts geaendert hat (z.B. bei manuell ausgeloesten Laeufen)."""
     value, classification = get_fear_greed()
     recommendation = get_recommendation(value)
     prices = get_prices()
+    coin_signals = get_coin_signals()
 
-    message = format_message(value, classification, recommendation, prices)
+    message = format_message(value, classification, recommendation, prices, coin_signals)
     logger.info(message.replace("\n", " | "))
 
-    last = load_last_recommendation()
-    if recommendation != last:
+    last_recommendation, last_coin_signals = load_last_state()
+    changed = recommendation != last_recommendation or coin_signals != last_coin_signals
+
+    if changed:
         send_telegram(f"Krypto-Update:\n{message}")
-        save_last_recommendation(recommendation)
+        save_last_state(recommendation, coin_signals)
     elif force_notify:
         send_telegram(f"Krypto-Update (manuell abgerufen):\n{message}")
     else:
-        logger.info(f"Empfehlung unveraendert ({recommendation}) -> keine Telegram-Nachricht.")
+        logger.info(f"Keine Aenderung ({recommendation}, {coin_signals}) -> keine Telegram-Nachricht.")
 
 
 def main():
