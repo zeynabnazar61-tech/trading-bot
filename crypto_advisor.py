@@ -37,6 +37,13 @@ COINS = {
 CHECK_INTERVAL_SECONDS = 60 * 60  # Fear & Greed Index aktualisiert sich nur 1x/Tag
 STATE_FILE = "logs/crypto_advisor_state.json"
 
+# --- Portfolio-Tracking ---
+# portfolio.json wird manuell gepflegt (z.B. direkt im GitHub-Web-Editor nach
+# jedem echten Kauf in Fomo) - das Skript selbst handelt nie automatisch.
+PORTFOLIO_FILE = "portfolio.json"
+TOTAL_BUDGET_EUR = 20.0
+MAX_TRADE_PCT_OF_BUDGET = 0.2  # Erinnerung: nie mehr als 20% des Budgets pro Trade
+
 # --- Pro-Coin-Signal (SMA-Crossover + Trendfilter, taegliche Kurse) ---
 # Eigene, kleinere Fenster als beim Aktien-Bot (strategy.py), weil hier mit
 # TAEGLICHEN statt 15-Minuten-Kerzen gerechnet wird.
@@ -101,11 +108,12 @@ def get_recommendation(value: int) -> str:
     return "HOLD"
 
 
-def get_coin_history(coin_id: str) -> pd.DataFrame:
-    """Holt taegliche Schlusskurse eines Coins (fuer SMA-Berechnung)."""
+def get_coin_history(coin_id: str, days: int = COIN_HISTORY_DAYS) -> pd.DataFrame:
+    """Holt taegliche Schlusskurse eines Coins (fuer SMA-Berechnung).
+    days ist ueberschreibbar, z.B. fuer laengere Backtest-Zeitraeume."""
     url = (
         f"https://api.coingecko.com/api/v3/coins/{coin_id}/market_chart"
-        f"?vs_currency=usd&days={COIN_HISTORY_DAYS}&interval=daily"
+        f"?vs_currency=usd&days={days}&interval=daily"
     )
     response = _get_with_retry(url)
     prices = response.json()["prices"]  # [[timestamp_ms, price], ...]
@@ -192,6 +200,63 @@ def get_coin_signals() -> dict:
     return signals
 
 
+def load_portfolio() -> list:
+    """Liest deine echten Fomo-Kaeufe aus portfolio.json.
+    Format: {"trades": [{"coin": "bitcoin", "symbol": "BTC",
+                          "amount_eur": 5.0, "price_eur": 73000.0, "date": "2026-09-06"}]}"""
+    if not os.path.exists(PORTFOLIO_FILE):
+        return []
+    try:
+        with open(PORTFOLIO_FILE, "r") as f:
+            return json.load(f).get("trades", [])
+    except (json.JSONDecodeError, OSError) as e:
+        logger.warning(f"Konnte portfolio.json nicht lesen: {e}")
+        return []
+
+
+def get_eur_prices(coin_ids: list) -> dict:
+    """Holt aktuelle EUR-Preise fuer die angegebenen Coins (fuer Portfolio-Bewertung,
+    da du in Fomo in Euro investierst)."""
+    if not coin_ids:
+        return {}
+    ids = ",".join(coin_ids)
+    url = f"https://api.coingecko.com/api/v3/simple/price?ids={ids}&vs_currencies=eur"
+    response = _get_with_retry(url)
+    return {coin_id: data["eur"] for coin_id, data in response.json().items()}
+
+
+def compute_portfolio_summary(trades: list, eur_prices: dict) -> dict:
+    """Aggregiert investierten Betrag vs. aktuellen Wert, gesamt + pro Coin."""
+    per_coin = {}
+    total_invested = 0.0
+    total_current = 0.0
+
+    for trade in trades:
+        coin_id = trade["coin"]
+        symbol = trade.get("symbol", coin_id.upper())
+        invested = float(trade["amount_eur"])
+        buy_price = float(trade["price_eur"])
+        current_price = eur_prices.get(coin_id)
+        if current_price is None or buy_price <= 0:
+            continue
+
+        coins_held = invested / buy_price
+        current_value = coins_held * current_price
+
+        entry = per_coin.setdefault(symbol, {"invested": 0.0, "current_value": 0.0})
+        entry["invested"] += invested
+        entry["current_value"] += current_value
+
+        total_invested += invested
+        total_current += current_value
+
+    return {
+        "per_coin": per_coin,
+        "total_invested": total_invested,
+        "total_current": total_current,
+    }
+
+
 def load_last_state():
     if not os.path.exists(STATE_FILE):
         return None, {}
@@ -209,7 +274,7 @@ def save_last_state(recommendation: str, coin_signals: dict) -> None:
         json.dump({"last_recommendation": recommendation, "last_coin_signals": coin_signals}, f)
 
 
-def format_message(value, classification, recommendation, prices, coin_signals, trending=None) -> str:
+def format_message(value, classification, recommendation, prices, coin_signals, trending=None, portfolio=None) -> str:
     lines = [
         f"Markt-Stimmung: {recommendation}",
         f"Fear & Greed Index: {value} ({classification})",
@@ -238,6 +303,22 @@ def format_message(value, classification, recommendation, prices, coin_signals, 
         for coin in trending:
             lines.append(f"- {coin['symbol']} ({coin['name']}) | Signal: {coin['signal']}")
 
+    if portfolio and portfolio["total_invested"] > 0:
+        invested = portfolio["total_invested"]
+        current = portfolio["total_current"]
+        pnl = current - invested
+        pnl_pct = (pnl / invested * 100) if invested else 0
+        lines.append("")
+        lines.append(f"Dein Portfolio: investiert {invested:.2f}€, aktueller Wert {current:.2f}€, "
+                     f"{'Gewinn' if pnl >= 0 else 'Verlust'} {pnl:+.2f}€ ({pnl_pct:+.2f}%)")
+        for symbol, entry in portfolio["per_coin"].items():
+            coin_pnl = entry["current_value"] - entry["invested"]
+            lines.append(f"- {symbol}: {entry['invested']:.2f}€ investiert -> {entry['current_value']:.2f}€ ({coin_pnl:+.2f}€)")
+
+    max_trade = TOTAL_BUDGET_EUR * MAX_TRADE_PCT_OF_BUDGET
+    lines.append("")
+    lines.append(f"Risiko-Erinnerung: nie mehr als ca. {max_trade:.2f}€ ({MAX_TRADE_PCT_OF_BUDGET*100:.0f}% von {TOTAL_BUDGET_EUR:.0f}€) pro Trade. Keine Anlageberatung.")
+
     return "\n".join(lines)
 
 
@@ -255,7 +336,17 @@ def run_once(force_notify: bool = False):
         logger.warning(f"Konnte Trending-Coins nicht abrufen: {e}")
         trending = []
 
-    message = format_message(value, classification, recommendation, prices, coin_signals, trending)
+    portfolio = None
+    try:
+        trades = load_portfolio()
+        if trades:
+            coin_ids = {t["coin"] for t in trades}
+            eur_prices = get_eur_prices(list(coin_ids))
+            portfolio = compute_portfolio_summary(trades, eur_prices)
+    except Exception as e:
+        logger.warning(f"Konnte Portfolio nicht auswerten: {e}")
+
+    message = format_message(value, classification, recommendation, prices, coin_signals, trending, portfolio)
     logger.info(message.replace("\n", " | "))
 
     last_recommendation, last_coin_signals = load_last_state()
