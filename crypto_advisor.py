@@ -41,7 +41,7 @@ STATE_FILE = "logs/crypto_advisor_state.json"
 # portfolio.json wird manuell gepflegt (z.B. direkt im GitHub-Web-Editor nach
 # jedem echten Kauf in Fomo) - das Skript selbst handelt nie automatisch.
 PORTFOLIO_FILE = "portfolio.json"
-TOTAL_BUDGET_EUR = 20.0
+TOTAL_BUDGET_USD = 18.78  # dein aktuelles Fomo-Guthaben
 MAX_TRADE_PCT_OF_BUDGET = 0.2  # Erinnerung: nie mehr als 20% des Budgets pro Trade
 
 # --- Pro-Coin-Signal (SMA-Crossover + Trendfilter, taegliche Kurse) ---
@@ -203,7 +203,7 @@ def get_coin_signals() -> dict:
 def load_portfolio() -> list:
     """Liest deine echten Fomo-Kaeufe aus portfolio.json.
     Format: {"trades": [{"coin": "bitcoin", "symbol": "BTC",
-                          "amount_eur": 5.0, "price_eur": 73000.0, "date": "2026-09-06"}]}"""
+                          "amount_usd": 5.0, "price_usd": 79000.0, "date": "2026-09-06"}]}"""
     if not os.path.exists(PORTFOLIO_FILE):
         return []
     try:
@@ -214,18 +214,18 @@ def load_portfolio() -> list:
         return []
 
 
-def get_eur_prices(coin_ids: list) -> dict:
-    """Holt aktuelle EUR-Preise fuer die angegebenen Coins (fuer Portfolio-Bewertung,
-    da du in Fomo in Euro investierst)."""
+def get_usd_prices(coin_ids: list) -> dict:
+    """Holt aktuelle USD-Preise fuer die angegebenen Coins (fuer Portfolio-Bewertung,
+    da Fomo dir Preise in Dollar anzeigt)."""
     if not coin_ids:
         return {}
     ids = ",".join(coin_ids)
-    url = f"https://api.coingecko.com/api/v3/simple/price?ids={ids}&vs_currencies=eur"
+    url = f"https://api.coingecko.com/api/v3/simple/price?ids={ids}&vs_currencies=usd"
     response = _get_with_retry(url)
-    return {coin_id: data["eur"] for coin_id, data in response.json().items()}
+    return {coin_id: data["usd"] for coin_id, data in response.json().items()}
 
 
-def compute_portfolio_summary(trades: list, eur_prices: dict) -> dict:
+def compute_portfolio_summary(trades: list, usd_prices: dict) -> dict:
     """Aggregiert investierten Betrag vs. aktuellen Wert, gesamt + pro Coin."""
     per_coin = {}
     total_invested = 0.0
@@ -234,9 +234,9 @@ def compute_portfolio_summary(trades: list, eur_prices: dict) -> dict:
     for trade in trades:
         coin_id = trade["coin"]
         symbol = trade.get("symbol", coin_id.upper())
-        invested = float(trade["amount_eur"])
-        buy_price = float(trade["price_eur"])
-        current_price = eur_prices.get(coin_id)
+        invested = float(trade["amount_usd"])
+        buy_price = float(trade["price_usd"])
+        current_price = usd_prices.get(coin_id)
         if current_price is None or buy_price <= 0:
             continue
 
@@ -309,15 +309,15 @@ def format_message(value, classification, recommendation, prices, coin_signals, 
         pnl = current - invested
         pnl_pct = (pnl / invested * 100) if invested else 0
         lines.append("")
-        lines.append(f"Dein Portfolio: investiert {invested:.2f}€, aktueller Wert {current:.2f}€, "
-                     f"{'Gewinn' if pnl >= 0 else 'Verlust'} {pnl:+.2f}€ ({pnl_pct:+.2f}%)")
+        lines.append(f"Dein Portfolio: investiert ${invested:.2f}, aktueller Wert ${current:.2f}, "
+                     f"{'Gewinn' if pnl >= 0 else 'Verlust'} ${pnl:+.2f} ({pnl_pct:+.2f}%)")
         for symbol, entry in portfolio["per_coin"].items():
             coin_pnl = entry["current_value"] - entry["invested"]
-            lines.append(f"- {symbol}: {entry['invested']:.2f}€ investiert -> {entry['current_value']:.2f}€ ({coin_pnl:+.2f}€)")
+            lines.append(f"- {symbol}: ${entry['invested']:.2f} investiert -> ${entry['current_value']:.2f} ({coin_pnl:+.2f}$)")
 
-    max_trade = TOTAL_BUDGET_EUR * MAX_TRADE_PCT_OF_BUDGET
+    max_trade = TOTAL_BUDGET_USD * MAX_TRADE_PCT_OF_BUDGET
     lines.append("")
-    lines.append(f"Risiko-Erinnerung: nie mehr als ca. {max_trade:.2f}€ ({MAX_TRADE_PCT_OF_BUDGET*100:.0f}% von {TOTAL_BUDGET_EUR:.0f}€) pro Trade. Keine Anlageberatung.")
+    lines.append(f"Risiko-Erinnerung: nie mehr als ca. ${max_trade:.2f} ({MAX_TRADE_PCT_OF_BUDGET*100:.0f}% von ${TOTAL_BUDGET_USD:.2f}) pro Trade. Keine Anlageberatung.")
 
     return "\n".join(lines)
 
@@ -341,8 +341,8 @@ def run_once(force_notify: bool = False):
         trades = load_portfolio()
         if trades:
             coin_ids = {t["coin"] for t in trades}
-            eur_prices = get_eur_prices(list(coin_ids))
-            portfolio = compute_portfolio_summary(trades, eur_prices)
+            usd_prices = get_usd_prices(list(coin_ids))
+            portfolio = compute_portfolio_summary(trades, usd_prices)
     except Exception as e:
         logger.warning(f"Konnte Portfolio nicht auswerten: {e}")
 
