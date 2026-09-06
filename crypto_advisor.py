@@ -41,7 +41,7 @@ STATE_FILE = "logs/crypto_advisor_state.json"
 # portfolio.json wird manuell gepflegt (z.B. direkt im GitHub-Web-Editor nach
 # jedem echten Kauf in Fomo) - das Skript selbst handelt nie automatisch.
 PORTFOLIO_FILE = "portfolio.json"
-TOTAL_BUDGET_USD = 18.78  # dein aktuelles Fomo-Guthaben
+TOTAL_BUDGET_USD = 17.57  # dein aktuelles Fomo-Guthaben (Cash + Positionen)
 MAX_TRADE_PCT_OF_BUDGET = 0.2  # Erinnerung: nie mehr als 20% des Budgets pro Trade
 
 # --- Pro-Coin-Signal (SMA-Crossover + Trendfilter, taegliche Kurse) ---

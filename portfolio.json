@@ -1,3 +1,5 @@
 {
-  "trades": []
+  "trades": [
+    {"coin": "gamestop-robinhood-tokenized-stock", "symbol": "GME", "amount_usd": 5.0, "price_usd": 19.51, "date": "2026-09-07"}
+  ]
 }
