@@ -25,7 +25,15 @@ from notifier import send_telegram
 
 logger = get_logger("crypto_advisor")
 
-COINS = {"bitcoin": "BTC", "ethereum": "ETH", "solana": "SOL"}
+COINS = {
+    "bitcoin": "BTC",
+    "ethereum": "ETH",
+    "solana": "SOL",
+    "binancecoin": "BNB",
+    "ripple": "XRP",
+    "dogecoin": "DOGE",
+    "cardano": "ADA",
+}
 CHECK_INTERVAL_SECONDS = 60 * 60  # Fear & Greed Index aktualisiert sich nur 1x/Tag
 STATE_FILE = "logs/crypto_advisor_state.json"
 
@@ -51,10 +59,24 @@ signal.signal(signal.SIGINT, _handle_shutdown)
 signal.signal(signal.SIGTERM, _handle_shutdown)
 
 
+def _get_with_retry(url: str, retries: int = 3, backoff_seconds: int = 5):
+    """GET mit Wiederholung bei Ratenlimits (429) und Serverfehlern (5xx),
+    damit ein einzelner API-Hupser nicht gleich den ganzen Lauf abbrechen laesst."""
+    last_error = None
+    for attempt in range(retries):
+        response = requests.get(url, timeout=10)
+        if response.status_code == 429 or response.status_code >= 500:
+            last_error = response
+            time.sleep(backoff_seconds * (attempt + 1))
+            continue
+        response.raise_for_status()
+        return response
+    last_error.raise_for_status()
+
+
 def get_fear_greed():
     """Holt den aktuellen Fear & Greed Index (0-100) + Klassifikation."""
-    response = requests.get("https://api.alternative.me/fng/?limit=1", timeout=10)
-    response.raise_for_status()
+    response = _get_with_retry("https://api.alternative.me/fng/?limit=1")
     data = response.json()["data"][0]
     return int(data["value"]), data["value_classification"]
 
@@ -66,8 +88,7 @@ def get_prices():
         f"https://api.coingecko.com/api/v3/simple/price"
         f"?ids={ids}&vs_currencies=usd&include_24hr_change=true"
     )
-    response = requests.get(url, timeout=10)
-    response.raise_for_status()
+    response = _get_with_retry(url)
     return response.json()
 
 
@@ -86,8 +107,7 @@ def get_coin_history(coin_id: str) -> pd.DataFrame:
         f"https://api.coingecko.com/api/v3/coins/{coin_id}/market_chart"
         f"?vs_currency=usd&days={COIN_HISTORY_DAYS}&interval=daily"
     )
-    response = requests.get(url, timeout=10)
-    response.raise_for_status()
+    response = _get_with_retry(url)
     prices = response.json()["prices"]  # [[timestamp_ms, price], ...]
     return pd.DataFrame({"close": [p[1] for p in prices]})
 
@@ -130,9 +150,12 @@ def get_coin_signal(coin_id: str) -> str:
 
 
 def get_coin_signals() -> dict:
-    """Pro-Coin-Signale, Fehler bei einem Coin duerfen die anderen nicht stoppen."""
+    """Pro-Coin-Signale, Fehler bei einem Coin duerfen die anderen nicht stoppen.
+    Kleine Pause zwischen Anfragen, um CoinGecko-Ratenlimits (429) zu vermeiden."""
     signals = {}
-    for coin_id in COINS:
+    for i, coin_id in enumerate(COINS):
+        if i > 0:
+            time.sleep(1.5)
         try:
             signals[coin_id] = get_coin_signal(coin_id)
         except Exception as e:
