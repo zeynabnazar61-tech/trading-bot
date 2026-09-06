@@ -101,7 +101,9 @@ def format_message(value, classification, recommendation, prices) -> str:
     return "\n".join(lines)
 
 
-def run_once():
+def run_once(force_notify: bool = False):
+    """force_notify=True schickt immer eine Telegram-Nachricht, auch wenn sich
+    die Empfehlung nicht geaendert hat (z.B. bei manuell ausgeloesten Laeufen)."""
     value, classification = get_fear_greed()
     recommendation = get_recommendation(value)
     prices = get_prices()
@@ -113,6 +115,8 @@ def run_once():
     if recommendation != last:
         send_telegram(f"Krypto-Update:\n{message}")
         save_last_recommendation(recommendation)
+    elif force_notify:
+        send_telegram(f"Krypto-Update (manuell abgerufen):\n{message}")
     else:
         logger.info(f"Empfehlung unveraendert ({recommendation}) -> keine Telegram-Nachricht.")
 
@@ -137,6 +141,9 @@ if __name__ == "__main__":
     if "--once" in sys.argv:
         # Einmaliger Durchlauf statt Endlos-Schleife, z.B. fuer GitHub Actions
         # Cron-Jobs: dort startet jeder Lauf einen frischen, kurzlebigen Container.
-        run_once()
+        # GITHUB_EVENT_NAME wird von GitHub Actions automatisch gesetzt:
+        # "workflow_dispatch" = manuell per "Run workflow" Button ausgeloest.
+        manually_triggered = os.environ.get("GITHUB_EVENT_NAME") == "workflow_dispatch"
+        run_once(force_notify=manually_triggered)
     else:
         main()
