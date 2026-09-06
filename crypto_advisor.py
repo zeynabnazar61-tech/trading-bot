@@ -149,6 +149,34 @@ def get_coin_signal(coin_id: str) -> str:
     return "HOLD"
 
 
+def get_trending_coins() -> list:
+    """Holt die weltweit aktuell meistgesuchten Coins von CoinGecko.
+    Fomo selbst hat keine oeffentliche API fuer den eigenen 'Trending'-Feed,
+    daher dient CoinGecko hier als bester frei verfuegbarer Ersatz."""
+    response = _get_with_retry("https://api.coingecko.com/api/v3/search/trending")
+    data = response.json()
+    coins = []
+    for entry in data.get("coins", [])[:5]:
+        item = entry["item"]
+        coins.append({"id": item["id"], "symbol": item["symbol"].upper(), "name": item["name"]})
+    return coins
+
+
+def get_trending_with_signals() -> list:
+    """Trending-Coins + (falls genug Kurshistorie vorhanden) ein Trend-Signal.
+    Neue/unbekannte Coins ohne ausreichend Historie fallen sicher auf HOLD zurueck."""
+    trending = get_trending_coins()
+    for i, coin in enumerate(trending):
+        if i > 0:
+            time.sleep(1.5)
+        try:
+            coin["signal"] = get_coin_signal(coin["id"])
+        except Exception as e:
+            logger.warning(f"Konnte Trend-Signal fuer trending Coin {coin['id']} nicht berechnen: {e}")
+            coin["signal"] = "HOLD"
+    return trending
+
+
 def get_coin_signals() -> dict:
     """Pro-Coin-Signale, Fehler bei einem Coin duerfen die anderen nicht stoppen.
     Kleine Pause zwischen Anfragen, um CoinGecko-Ratenlimits (429) zu vermeiden."""
@@ -181,7 +209,7 @@ def save_last_state(recommendation: str, coin_signals: dict) -> None:
         json.dump({"last_recommendation": recommendation, "last_coin_signals": coin_signals}, f)
 
 
-def format_message(value, classification, recommendation, prices, coin_signals) -> str:
+def format_message(value, classification, recommendation, prices, coin_signals, trending=None) -> str:
     lines = [
         f"Markt-Stimmung: {recommendation}",
         f"Fear & Greed Index: {value} ({classification})",
@@ -204,6 +232,12 @@ def format_message(value, classification, recommendation, prices, coin_signals) 
         lines.append(f"Groesster 24h-Ruecksetzer: {biggest_drop} ({changes[biggest_drop]:+.2f}%)")
         lines.append(f"Groesster 24h-Anstieg: {biggest_rise} ({changes[biggest_rise]:+.2f}%)")
 
+    if trending:
+        lines.append("")
+        lines.append("Gerade weltweit trending (CoinGecko, kein Fomo-eigener Feed):")
+        for coin in trending:
+            lines.append(f"- {coin['symbol']} ({coin['name']}) | Signal: {coin['signal']}")
+
     return "\n".join(lines)
 
 
@@ -215,7 +249,13 @@ def run_once(force_notify: bool = False):
     prices = get_prices()
     coin_signals = get_coin_signals()
 
-    message = format_message(value, classification, recommendation, prices, coin_signals)
+    try:
+        trending = get_trending_with_signals()
+    except Exception as e:
+        logger.warning(f"Konnte Trending-Coins nicht abrufen: {e}")
+        trending = []
+
+    message = format_message(value, classification, recommendation, prices, coin_signals, trending)
     logger.info(message.replace("\n", " | "))
 
     last_recommendation, last_coin_signals = load_last_state()
