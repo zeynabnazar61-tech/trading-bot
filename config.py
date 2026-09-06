@@ -47,8 +47,11 @@ LOG_FILE = "logs/trading_bot.log"
 RISK_STATE_FILE = "logs/risk_state.json"  # Persistenz fuer RiskManager-Tageszaehler (ueberlebt Neustarts)
 
 # --- Telegram (optional) ---
-TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
+# .strip() faengt versehentliche Leerzeichen/Zeilenumbrueche beim Kopieren
+# des Secrets ab (z.B. in GitHub Actions Secrets) - sonst wird daraus eine
+# kaputte URL (bot%20<token>) und Telegram antwortet mit 404 Not Found.
+TELEGRAM_BOT_TOKEN = (os.getenv("TELEGRAM_BOT_TOKEN") or "").strip() or None
+TELEGRAM_CHAT_ID = (os.getenv("TELEGRAM_CHAT_ID") or "").strip() or None
 
 
 def validate_config():
